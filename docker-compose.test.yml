@@ -1,0 +1,19 @@
+services:
+  test-db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: test_root_pw
+      MYSQL_DATABASE: via_bot_test
+    ports:
+      # The web platform's throwaway database takes 3307, so the two suites can
+      # run side by side on one machine. The test support reads the same
+      # variable, so the port is decided in exactly one place.
+      - "${BOT_TEST_DB_PORT:-3308}:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest_root_pw"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s

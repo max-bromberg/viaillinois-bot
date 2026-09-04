@@ -1,0 +1,33 @@
+{
+  "name": "viaillinois-bot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types --env-file=.env src/index.ts",
+    "start": "node --experimental-strip-types --env-file=.env src/index.ts",
+    "test": "vitest run --project unit",
+    "test:db": "vitest run --project db",
+    "test:all": "vitest run",
+    "test:watch": "vitest",
+    "check:language": "node scripts/check-language.js",
+    "test:language": "vitest run scripts/tests/checkLanguage.test.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "drizzle-orm": "^0.45.2",
+    "mysql2": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

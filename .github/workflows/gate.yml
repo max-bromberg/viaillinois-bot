@@ -1,0 +1,111 @@
+name: gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ['v*']
+
+jobs:
+  quality:
+    name: tests, types and language
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Version consistency
+        run: npx vitest run --project unit scripts/tests/version.test.js
+
+      - name: Language check
+        run: npm run check:language
+
+      - name: Language check tests
+        run: npm run test:language
+
+      - name: Bump script tests
+        run: npx vitest run --project unit scripts/tests/bumpVersion.test.js
+
+      - name: Compose file tests
+        run: npx vitest run --project unit scripts/tests/composeFile.test.js
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Reported, never enforced. A threshold chosen before the real number is
+      # known only ever gets lowered until it passes.
+      # Scoped to the unit project, because this job has no database container
+      # and the db project cannot run here.
+      - name: Coverage, reported not enforced
+        run: npx vitest run --project unit --coverage || true
+
+  database:
+    name: migrations and database tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The same compose file and the same readiness wait that developers use
+      # locally, so a failure here is a real signal rather than a difference in
+      # how CI provisions its database. startTestDb polls with a real
+      # connection, because MySQL reports healthy shortly before it finishes
+      # first-boot initialization and docker compose up would return too early.
+      - name: Start the throwaway database
+        run: node --experimental-strip-types -e "import('./tests/support/testDb.ts').then(m => m.startTestDb())"
+
+      - name: Migrations apply cleanly from empty
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3308'
+          BOT_DB_USER: root
+          BOT_DB_PASSWORD: test_root_pw
+          BOT_DB_NAME: via_bot_test
+        run: node --experimental-strip-types src/db/migrate.ts
+
+      # Run from the repository root, because drizzle.config.ts declares its
+      # schema and migration paths relative to the working directory.
+      - name: Drizzle drift check
+        run: npx drizzle-kit check
+
+      - name: Database tests
+        run: npm run test:db
+
+      - name: Stop the throwaway database
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+  security:
+    name: audit and secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit
+        run: npm audit --audit-level=high
+
+      - name: Secret scanning
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
