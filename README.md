@@ -26,8 +26,8 @@ individual feature and the channel it posts to.
 ## Status
 
 This repository is in the planning stage. Nothing runs yet. The design is written out under
-`docs/superpowers/specs`, and implementation plans will follow under
-`docs/superpowers/plans` once the specifications are agreed.
+`docs/superpowers/specs`, the decisions behind it are in `docs/decisions.md`, and the
+implementation plans are under `docs/superpowers/plans`.
 
 | Document | What it covers |
 |---|---|
@@ -35,6 +35,7 @@ This repository is in the planning stage. Nothing runs yet. The design is writte
 | `docs/superpowers/specs/2026-09-04-via-internal-service-api.md` | The work on the web platform side: the internal service API, account linking, the outbox, and the new tables |
 | `docs/roadmap.md` | The second and third horizons, where VIA grows from an event platform into the platform that runs an RSO |
 | `docs/decisions.md` | The decision log |
+| `docs/superpowers/plans/` | The implementation plans, one per spec, in ordered increments |
 
 ## Relationship to the web platform
 

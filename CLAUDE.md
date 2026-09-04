@@ -22,7 +22,8 @@ that talks to the web platform.
 
 ## Tech Stack
 
-- **Runtime**: Node.js 20+ (ESM), the same runtime the web platform uses
+- **Runtime**: Node.js 20+ (ESM), the same runtime the web platform uses, with TypeScript
+  throughout, run through Node's type stripping and no build step
 - **Discord**: `discord.js`, connected to the gateway as a single shard
 - **Database**: its own database, `via_bot`, inside the MySQL 8.0 container the web platform
   already runs, accessed through Drizzle over one connection pool

@@ -1,6 +1,6 @@
 # VIA Discord Bot
 
-**Status**: draft for review
+**Status**: agreed on 2026-09-04, see section 14 and `docs/decisions.md`
 **Date**: 2026-09-04
 **Companion spec**: `2026-09-04-via-internal-service-api.md`, which covers the work on the
 web platform side that this design depends on.
@@ -249,9 +249,9 @@ for each event that day, with a link to the card.
 **Native scheduled events** (`mirror.scheduled`). Each upcoming event is mirrored into the
 server's own Events tab as a Discord scheduled event of the external kind, carrying the
 place and time, so members can mark themselves interested with Discord's own control and
-get Discord's own reminders. Only occurrences within a rolling window of the next few weeks
-are mirrored, so a term of weekly meetings does not flood the tab, and the window rolls
-forward daily. When a member marks interest, the gateway tells the bot, and the bot records
+get Discord's own reminders. Only occurrences within a rolling window, two weeks by default and
+adjustable per server, are mirrored, so a term of weekly meetings does not flood the tab,
+and the window rolls forward daily. When a member marks interest, the gateway tells the bot, and the bot records
 it on VIA as an interest signal: by NetID for a linked person, and as an anonymous count
 for anyone else. Interest is what replaces the RSVPs the web platform removed. Requires the
 Manage Events permission. Mappings live in `Event_Mirrors`.
@@ -368,6 +368,12 @@ and the shared `internal` network to reach the web platform's container by servi
 exposes one port on the host, for its health endpoint, and nothing else. It runs with a
 memory and processor ceiling like the other two containers.
 
+### Language
+
+The bot is written in TypeScript throughout and run through Node's type stripping, with no
+build step, which is how the web platform already runs its Drizzle and migration files.
+Tests run the same files through Vitest.
+
 ### The gateway
 
 The bot holds one gateway connection, as a single shard, which is ample for the number of
@@ -378,7 +384,10 @@ only inside a context menu interaction on a specific message, which Discord deli
 of the interaction, and the bot uses it for that interaction and discards it.
 
 Application commands are registered globally at startup from the feature registry, so a
-change to the registry is a change to the commands. Every interaction is acknowledged
+change to the registry is a change to the commands. Student facing commands sit at the top
+level, so a student types `/events`, `/midterms` or `/rooms`, and everything for setup and
+for boards sits under one `/via` group, so a manager types `/via setup` and a board member
+`/via postpone`. Every interaction is acknowledged
 within Discord's deadline and then answered, so a slow web platform shows as a "thinking"
 state rather than a failed command.
 
@@ -534,11 +543,20 @@ Delivery idempotency, the outbox cursor, and rate windows are tested against the
 database in the `db` project, because their correctness is about what the database
 guarantees.
 
+Against a real Discord, development uses a separate development Discord application and
+one shared test server, run from a developer's machine against a local stack. There is no
+staging copy of the stack on the server.
+
 ## 13. Delivery sequence
 
 The first release is horizon one as a whole, but it lands in increments so that each is
-testable, reviewable and deployable to a staging Discord server on its own. The web
-platform work in the companion document comes first, because everything here depends on it.
+testable and reviewable on its own against the test Discord server. The web platform work
+in the companion document comes first in order, because everything here depends on it, and
+the two ship together: no web platform release is cut for that work on its own, and the
+first cutover that pins a bot tag is the launch of both. Web platform increments still
+merge to `main` as they are completed, and if a fix has to be released in between, the
+internal service API travels with it inert, since nothing can reach it without the bot's
+service token.
 
 1. **Foundation.** Repository scaffold, gate, database and migrations, the gateway client,
    the web platform client, health, the feature registry, and the Compose and cutover
@@ -558,23 +576,25 @@ platform work in the companion document comes first, because everything here dep
 An implementation plan per increment will be written under `docs/superpowers/plans` once
 this specification is agreed.
 
-## 14. Open questions
+## 14. Decisions on the points the draft left open
 
-These are the points where the design took a position that is worth a second look.
+These were put as options and decided on 2026-09-04. The reasoning is in
+`docs/decisions.md`.
 
-1. **Interest for unlinked people.** The design records it as a salted hash so counts are
-   honest without storing identities. The alternative is to count only linked people, which
-   is simpler and undercounts.
-2. **Linked roles and the Discord authorization.** Pushing the linked role facts requires
-   the web platform to keep the Discord authorization from the link flow, encrypted at
-   rest, so it can refresh the facts when a membership changes. The alternative is to push
-   once at link time and never refresh, which makes the board fact stale.
-3. **Feedback recipients.** The design asks people who marked interest or set a reminder.
-   Once check in exists in the second horizon, attendance is the better signal, and the
-   design should switch to it.
-4. **Where the binding check lives.** The design has the web platform confirm that the
-   person binding a server to an RSO is on its board. A looser rule, any linked person, would
-   let a member set the bot up for a board that has not got round to it. That is a
-   judgment about how RSOs work and worth deciding deliberately.
-5. **The mirroring window.** A few weeks is a guess at what keeps the Events tab useful
-   without flooding it. It should be a per server setting with that default.
+1. **Interest for unlinked people** is counted, keyed by a salted hash of the Discord
+   identifier, so the count that replaces RSVPs is honest and nobody can reverse it.
+2. **Linked roles** are refreshed: the web platform keeps the Discord authorization from
+   the link flow, encrypted at rest, and re-pushes the facts when a membership changes.
+3. **Feedback requests** go to anyone linked who marked interest in the event or set a
+   reminder for it. When check in exists, attendance replaces that signal.
+4. **Binding a server to an RSO** requires a server manager who is linked and on that
+   RSO's board, or a global administrator.
+5. **The mirroring window** defaults to two weeks and is a per server setting.
+6. **Cancelling** is a state of its own on the web platform, not a delete.
+7. **The deploy** builds the bot from a sibling checkout pinned by a file in the web
+   platform's repository, with no image registry.
+8. **The web platform work and the bot ship together**, in one cutover.
+9. **Commands** are top level for students and under one `/via` group for setup and boards.
+10. **The bot is TypeScript** run through Node's type stripping, with no build step.
+11. **Real Discord testing** uses a development application and one shared test server from
+    a developer's machine, with no staging server.

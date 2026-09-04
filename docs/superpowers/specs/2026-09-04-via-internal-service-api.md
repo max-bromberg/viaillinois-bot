@@ -1,6 +1,6 @@
 # The Internal Service API and the Web Platform Work for the Discord Bot
 
-**Status**: draft for review
+**Status**: agreed on 2026-09-04
 **Date**: 2026-09-04
 **Repository this lands in**: `viaillinois`, the web platform. It is specified here, in the
 bot's repository, because the bot is the reason for it and the two designs have to be read
@@ -346,9 +346,14 @@ repository's `docs/deployment.md` points at it.
 
 ## 11. Sequence
 
-This work is the first increment of the delivery sequence in the bot spec, and it is a
-release of the web platform on its own, deployable before the bot exists, because none of
-it changes anything the public sees except the cancelled state, the location note and the
-interest count. The order within it: tables and migrations, the guard and acting
-middleware, the reading endpoints, the outbox and its writers, linking and the account
-page, the acting endpoints, the personal calendar, then the stack and cutover changes.
+This work is the first increment of the delivery sequence in the bot spec. It ships with
+the bot, in one cutover, rather than as a release of its own: the first tag of the web
+platform that pins a bot tag in `deploy/bot-release` is the launch of both. The increments
+here still merge to `main` as they are completed, because nothing in them is reachable
+without the bot's service token, apart from the cancelled state, the location note and the
+interest count, which are small enough to travel with a fix release if one is needed in
+between.
+
+The order within it: tables and migrations, the guard and acting middleware, the reading
+endpoints, the outbox and its writers, linking and the account page, the acting endpoints,
+the personal calendar, then the stack and cutover changes.

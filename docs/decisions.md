@@ -79,3 +79,68 @@ installing.
 
 The bot repository runs a gate with the same three classes of job as the web platform, and
 the same rule against em dashes and en dashes, repository wide, with no exceptions.
+
+## 2026-09-04: Interest from unlinked people is counted through a salted hash
+
+The count that replaces RSVPs has to include the people who press Interested on a mirrored
+scheduled event without ever linking, or it undercounts the very people the feature is for.
+A salted hash of the Discord identifier deduplicates them and is reversible by nobody.
+
+## 2026-09-04: Linked role facts are refreshed, so the web platform keeps the Discord authorization
+
+The board fact would otherwise go stale the day a person leaves a board. The refresh token
+is encrypted at rest with a key in the stack's environment file, it is the only secret the
+web platform keeps on a person's behalf, and it is dropped when the link is removed.
+
+## 2026-09-04: Feedback requests go to people who marked interest or set a reminder
+
+Until check in exists, those are the two signals that a person meant to go. When
+attendance exists, it replaces them.
+
+## 2026-09-04: Binding a server to an RSO requires a board member
+
+A binding is a claim that a server speaks for an RSO. The server manager who makes it must
+be linked and on that RSO's board, or a global administrator. A member setting the bot up
+for a board that has not got round to it is refused, and told who can.
+
+## 2026-09-04: The mirroring window defaults to two weeks
+
+Two weeks keeps a server's Events tab useful without flooding it with a term of weekly
+meetings. It is a per server setting.
+
+## 2026-09-04: Cancelling an event is a state, not a delete
+
+A cancelled event that vanishes cannot tell the students who planned to attend that it was
+cancelled rather than mistyped. The web platform gains a cancelled state, the feed hides
+cancelled events by default and shows them in the archive, and the outbox distinguishes a
+cancellation from a deletion.
+
+## 2026-09-04: The deploy builds the bot from a pinned sibling checkout
+
+The web platform's repository pins the bot tag in `deploy/bot-release`, and the cutover
+builds the bot image from a checkout of this repository at that tag, beside the web
+platform's own checkout, exactly as it builds the web platform's image. No image registry
+and no registry credentials are involved.
+
+## 2026-09-04: The web platform work and the bot ship together
+
+The internal service API, the link flow, the outbox and the stack changes are not released
+on their own. They merge to `main` as they are completed, and the first web platform tag
+that pins a bot tag is the launch of both, in one cutover.
+
+## 2026-09-04: Student commands are top level, board and setup commands are under one group
+
+A student types `/events`, `/midterms` or `/rooms`. A server manager or board member types
+`/via setup` or `/via postpone`. The split keeps the student facing commands short and
+keeps everything with side effects under one recognisable name.
+
+## 2026-09-04: The bot is TypeScript with no build step
+
+TypeScript throughout, run through Node's type stripping, which the web platform already
+relies on for its Drizzle schema and migration files. Tests run the same files.
+
+## 2026-09-04: Real Discord testing uses a development application and one test server
+
+Development runs from a developer's machine against a local stack, with a separate
+development Discord application and one shared test server. There is no staging copy of
+the stack on the server.
