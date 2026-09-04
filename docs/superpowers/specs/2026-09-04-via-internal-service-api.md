@@ -40,8 +40,10 @@ the web platform serves one port. Two guards keep it internal:
 
 - Every request must carry `Authorization: Bearer <token>`, where the token is
   `BOT_SERVICE_TOKEN`, a long random secret in the stack's `.env` that both containers
-  read. A missing or wrong token is answered with a 401 and nothing else, and the attempt is
-  recorded as an access denial with reason `internal_unauthorized`.
+  read. A missing or wrong token is answered with a 401 carrying only the error shape, and
+  the attempt is recorded as an access denial with reason `internal_unauthorized`. When no
+  token is configured at all, the whole prefix answers 404, because a deployment without
+  the bot has no internal API.
 - The reverse proxy in front of the web platform does not forward `/internal`, so the path
   is unreachable from the internet even with the token. The web platform also refuses the
   path when the request arrived through the proxy, which it can tell from the forwarded
@@ -62,10 +64,11 @@ itself, which can read public data and the outbox and can do nothing that needs 
 The service token identifies the bot, so:
 
 - The public traffic budgets in `publicApiBudget` do not apply to `/internal`.
-- Load shedding places `/internal` in a tier above a signed in write, so it is refused
-  after everything except the health endpoint. When it is refused, the bot receives the
-  same busy answer with the same wait, and the refusal is counted under reason
-  `overloaded` with a route the availability tab can show.
+- Load shedding places `/internal` in the same tier as a signed in write, the last tier
+  there is, so it is refused only at the worst level and after everything except the
+  health endpoint. When it is refused, the bot receives the same busy answer with the
+  same wait, and the refusal is counted under reason `overloaded` with a route the
+  availability tab can show.
 - The login rate limit does not apply, because nothing under `/internal` logs anyone in.
 
 ### Shapes
@@ -74,7 +77,7 @@ Requests and answers are JSON. Times leave the API with the campus offset attach
 as the public API sends them, and arrive the same way. Errors use the shape the public API
 uses, with one addition: a machine readable `code` beside the sentence, so the bot can
 choose its wording without parsing prose. The codes the first release needs are
-`not_linked`, `forbidden`, `not_found`, `invalid`, `busy` and `conflict`.
+`unauthorized`, `not_linked`, `forbidden`, `not_found`, `invalid`, `busy` and `conflict`.
 
 Every answer carries `X-Via-Internal-Api-Version`, which is the web platform's version, so
 the bot's health endpoint can report which web platform it is talking to.

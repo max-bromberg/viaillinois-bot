@@ -48,8 +48,8 @@ as a linked person.
    `server/middleware/auth.js` passes for a linked editor and refuses a linked member, using
    the real middleware unchanged.
 3. Exemptions. Tests in the existing suites: `publicApiBudget` does not count a request
-   under `/internal`; `loadShed` assigns `/internal` a tier above a signed in write and
-   refuses it only at the highest level; the login limiter is not mounted on the router.
+   under `/internal`; `loadShed` assigns `/internal` the same tier as a signed in write and
+   refuses it only at the worst level; the login limiter is not mounted on the router.
 4. Error shape. A helper that answers `{ error, code }`, and a test that every refusal in
    this increment carries one of the codes the spec lists.
 5. Mount the router in `server/app.js` under `/internal/v1`, before the public routers, with
