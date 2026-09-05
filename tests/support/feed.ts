@@ -15,6 +15,7 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
   const follows = new Map<string, Set<number>>();
   const preferences = new Map<string, FeedPreferences>();
   const reminders: ReminderRow[] = [];
+  const courses = new Map<string, Set<string>>();
   let nextReminderId = 1;
 
   function defaults(discordUserId: string): FeedPreferences {
@@ -37,6 +38,11 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
   function followsOf(discordUserId: string): Set<number> {
     if (!follows.has(discordUserId)) follows.set(discordUserId, new Set());
     return follows.get(discordUserId)!;
+  }
+
+  function coursesOf(discordUserId: string): Set<string> {
+    if (!courses.has(discordUserId)) courses.set(discordUserId, new Set());
+    return courses.get(discordUserId)!;
   }
 
   return {
@@ -117,6 +123,29 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
       if (at < 0) return false;
       reminders.splice(at, 1);
       return true;
+    },
+
+    async courses(discordUserId: string): Promise<string[]> {
+      return [...coursesOf(discordUserId)].sort();
+    },
+
+    async addCourse(discordUserId: string, courseCode: string): Promise<boolean> {
+      row(discordUserId);
+      const held = coursesOf(discordUserId);
+      if (held.has(courseCode)) return false;
+      held.add(courseCode);
+      return true;
+    },
+
+    async removeCourse(discordUserId: string, courseCode: string): Promise<boolean> {
+      return coursesOf(discordUserId).delete(courseCode);
+    },
+
+    async courseFollowers(courseCode: string): Promise<string[]> {
+      return [...courses.entries()]
+        .filter(([, held]) => held.has(courseCode))
+        .map(([discordUserId]) => discordUserId)
+        .sort();
     },
   };
 }

@@ -23,6 +23,7 @@ import { createEventMirrors } from './mirror/eventMirrors.ts';
 import { createScheduledEventMirror } from './mirror/scheduledEvents.ts';
 import { createInterestRecorder } from './mirror/interest.ts';
 import { createAnnouncementHandlers } from './announce/handlers.ts';
+import { createMidtermHandlers } from './announce/midterms.ts';
 import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
@@ -33,6 +34,8 @@ import { createPersonalDigestJob } from './jobs/personalDigest.ts';
 import { createPersonalReminderJob } from './jobs/personalReminders.ts';
 import { createGuildDigestJob } from './jobs/guildDigest.ts';
 import { createDayOfReminderJob } from './jobs/dayOfReminders.ts';
+import { createExamReminderJob } from './jobs/examReminders.ts';
+import { createGuildExamsJob } from './jobs/guildExams.ts';
 
 /**
  * The bot's entry point, which is the one place everything is wired together.
@@ -122,17 +125,26 @@ const thisWeek = createThisWeekMessage({ guilds, deliveries, actions, via, disab
 const consumer = createOutboxConsumer({
   via,
   cursors,
-  handlers: createAnnouncementHandlers({
-    guilds,
-    mirrors,
-    deliveries,
-    actions,
-    via,
-    disable,
-    websiteUrl: config.viaPublicUrl,
-    mirror: scheduledEvents,
-    thisWeek,
-  }),
+  /**
+   * The handlers of both kinds of entry, in one map keyed by kind. The event
+   * and series entries reach the servers that follow an organization, and the
+   * midterm entries reach the people who added a course, which is why they are
+   * two modules rather than one.
+   */
+  handlers: {
+    ...createAnnouncementHandlers({
+      guilds,
+      mirrors,
+      deliveries,
+      actions,
+      via,
+      disable,
+      websiteUrl: config.viaPublicUrl,
+      mirror: scheduledEvents,
+      thisWeek,
+    }),
+    ...createMidtermHandlers({ feed, deliveries, deliver: deliverDirectMessage }),
+  },
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.
   invalidateRso: rsoId => via.invalidateRso(rsoId),
@@ -143,11 +155,11 @@ const mirrorWindow = createMirrorWindowJob({ guilds, mirror: scheduledEvents });
 /**
  * The timed posts, on one clock.
  *
- * The three hourly jobs are the ones whose work belongs to a particular hour,
+ * The four hourly jobs are the ones whose work belongs to a particular hour,
  * so a bot that was down over a digest hour sends that digest when it returns.
- * The two of the tick cadence are the ones whose work is due at a moment
- * somebody chose, and everything they owe is already written down in Reminders
- * and in the events themselves.
+ * The three of the tick cadence are the ones whose work is due at a moment
+ * somebody chose, and everything they owe is already written down in
+ * Reminders, in User_Courses and in the events and exams themselves.
  */
 const personalDigest = createPersonalDigestJob({
   feed, deliveries, via, deliver: deliverDirectMessage,
@@ -156,6 +168,10 @@ const personalReminders = createPersonalReminderJob({
   feed, deliveries, via, deliver: deliverDirectMessage,
 });
 const guildDigest = createGuildDigestJob({ guilds, deliveries, actions, via, disable });
+const guildExams = createGuildExamsJob({ guilds, deliveries, actions, via, disable });
+const examReminders = createExamReminderJob({
+  feed, deliveries, via, deliver: deliverDirectMessage,
+});
 const dayOfReminders = createDayOfReminderJob({
   guilds, deliveries, actions, via, disable, websiteUrl: config.viaPublicUrl,
 });
@@ -165,9 +181,11 @@ const scheduler = createJobScheduler({
   jobs: [
     { name: 'personal.digest', async run(hour) { await personalDigest.run(hour); } },
     { name: 'guild.digest', async run(hour) { await guildDigest.run(hour); } },
+    { name: 'guild.exams', async run(hour) { await guildExams.run(hour); } },
     { name: 'living.thisweek', async run(hour) { await thisWeek.refreshAll(hour.at); } },
     { name: 'personal.reminders', cadence: 'tick', async run(hour) { await personalReminders.run(hour); } },
     { name: 'guild.dayof', cadence: 'tick', async run(hour) { await dayOfReminders.run(hour); } },
+    { name: 'personal.exams', cadence: 'tick', async run(hour) { await examReminders.run(hour); } },
   ],
 });
 
@@ -222,7 +240,7 @@ console.log('via-bot: the outbox consumer is running');
 void mirrorWindow.start();
 console.log('via-bot: the mirroring window will be rolled daily');
 void scheduler.start();
-console.log('via-bot: the digests, the reminders and the this week message are on the clock');
+console.log('via-bot: the digests, the reminders, the exams and the this week message are on the clock');
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {

@@ -1,4 +1,8 @@
-import { eventQueryParams, type EventPage, type EventQuery, type Rso, type ViaClient } from './client.ts';
+import {
+  eventQueryParams, midtermQueryParams,
+  type CampusLocation, type Course, type EventPage, type EventQuery, type Midterm,
+  type MidtermQuery, type Rso, type ViaClient,
+} from './client.ts';
 
 /**
  * The hot read cache.
@@ -9,6 +13,13 @@ import { eventQueryParams, type EventPage, type EventQuery, type Rso, type ViaCl
  * dropped for an organization when an outbox entry touches it, so a change
  * made on the website shows in Discord within seconds rather than within a
  * minute.
+ *
+ * The course search, the room search and the midterm listing are held for the
+ * same minute and for the same reason. The two searches complete an option, so
+ * they fire on every keystroke, and the answer to when the next exam is does
+ * not depend on who is asking. The midterm outbox entries are not tied to an
+ * organization, so none of these is dropped by invalidateRso; a minute is short
+ * enough that a confirmed exam reaches a student who asks within it.
  *
  * A listing that asks for internal events is never cached. The web platform
  * answers those from the acting person's own memberships, so one person's
@@ -62,12 +73,30 @@ export function withHotReadCache(inner: ViaClient, options: HotReadCacheOptions 
 
   let rsoList: Entry<Rso[]> | null = null;
   const listings = new Map<string, { entry: Entry<EventPage>; rsoIds: number[] | null }>();
+  const courseSearches = new Map<string, Entry<Course[]>>();
+  const midtermListings = new Map<string, Entry<Midterm[]>>();
+  const roomSearches = new Map<string, Entry<CampusLocation[]>>();
 
   const fresh = (entry: Entry<unknown>) => entry.expiresAt > now().getTime();
   const until = () => now().getTime() + ttlMs;
 
   function copyPage(page: EventPage): EventPage {
     return { total: page.total, events: page.events.map(event => ({ ...event })) };
+  }
+
+  function copyCourses(courses: readonly Course[]): Course[] {
+    return courses.map(course => ({
+      ...course,
+      sections: course.sections.map(section => ({ ...section })),
+    }));
+  }
+
+  function copyMidterms(midterms: readonly Midterm[]): Midterm[] {
+    return midterms.map(midterm => ({ ...midterm }));
+  }
+
+  function copyRooms(rooms: readonly CampusLocation[]): CampusLocation[] {
+    return rooms.map(room => ({ ...room }));
   }
 
   return {
@@ -84,6 +113,9 @@ export function withHotReadCache(inner: ViaClient, options: HotReadCacheOptions 
     invalidateAll(): void {
       rsoList = null;
       listings.clear();
+      courseSearches.clear();
+      midtermListings.clear();
+      roomSearches.clear();
     },
 
     async listRsos(): Promise<Rso[]> {
@@ -106,6 +138,37 @@ export function withHotReadCache(inner: ViaClient, options: HotReadCacheOptions 
         rsoIds: rsosOf(query),
       });
       return copyPage(value);
+    },
+
+    async searchCourses(term: string, options: { sections?: boolean } = {}): Promise<Course[]> {
+      // A search for the sections is a different answer from a search for the
+      // names alone, so the two are held apart.
+      const key = `${options.sections ? 'sections' : 'names'}|${term}`;
+      const held = courseSearches.get(key);
+      if (held && fresh(held)) return copyCourses(held.value);
+
+      const value = await inner.searchCourses(term, options);
+      courseSearches.set(key, { value: copyCourses(value), expiresAt: until() });
+      return copyCourses(value);
+    },
+
+    async searchLocations(term: string): Promise<CampusLocation[]> {
+      const held = roomSearches.get(term);
+      if (held && fresh(held)) return copyRooms(held.value);
+
+      const value = await inner.searchLocations(term);
+      roomSearches.set(term, { value: copyRooms(value), expiresAt: until() });
+      return copyRooms(value);
+    },
+
+    async listMidterms(query: MidtermQuery = {}): Promise<Midterm[]> {
+      const key = midtermQueryParams(query).toString();
+      const held = midtermListings.get(key);
+      if (held && fresh(held)) return copyMidterms(held.value);
+
+      const value = await inner.listMidterms(query);
+      midtermListings.set(key, { value: copyMidterms(value), expiresAt: until() });
+      return copyMidterms(value);
     },
   };
 }

@@ -14,6 +14,10 @@ import {
   followCommand, unfollowCommand, followingCommand, calendarCommand,
   feedSettingsCommand, feedRemindersCommand, feedComponent,
 } from './feed.ts';
+import {
+  midtermsCommand, coursesAddCommand, coursesRemoveCommand, coursesListCommand,
+} from './midterms.ts';
+import { roomsCommand, courseCommand, buildingCommand } from './campus.ts';
 
 export { describeWait } from './types.ts';
 export type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
@@ -55,6 +59,13 @@ export const handlers: readonly CommandHandler[] = [
   feedSettingsCommand,
   feedRemindersCommand,
   calendarCommand,
+  midtermsCommand,
+  coursesAddCommand,
+  coursesRemoveCommand,
+  coursesListCommand,
+  roomsCommand,
+  courseCommand,
+  buildingCommand,
 ];
 
 /**

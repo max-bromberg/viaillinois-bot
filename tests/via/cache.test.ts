@@ -143,3 +143,89 @@ describe('caching the hot reads', () => {
     expect(via.calls.filter(call => call === 'listRsos')).toHaveLength(1);
   });
 });
+
+/**
+ * The two campus reads that are hot for the same reason the organization list
+ * is: a course autocomplete fires on every keystroke, and a room full of
+ * students asking when the next exam is asks the same question. Both are the
+ * same answer for everybody, which is what makes holding them safe.
+ */
+describe('caching the campus reads', () => {
+  function cached(startAt = '2026-09-05T14:30:00Z') {
+    const via = createFakeViaClient();
+    let clock = new Date(startAt);
+    const client = withHotReadCache(via, { now: () => clock });
+    return {
+      via,
+      client,
+      advance: (milliseconds: number) => { clock = new Date(clock.getTime() + milliseconds); },
+    };
+  }
+
+  it('asks the web platform once for a course search two keystrokes apart wanted', async () => {
+    const { via, client } = cached();
+    const first = await client.searchCourses('ECE 3');
+    const second = await client.searchCourses('ECE 3');
+    expect(second).toEqual(first);
+    expect(via.calls.filter(call => call === 'searchCourses')).toHaveLength(1);
+  });
+
+  it('tells one course search from another, and a search with sections from one without', async () => {
+    const { via, client } = cached();
+    await client.searchCourses('ECE 3');
+    await client.searchCourses('ECE 4');
+    await client.searchCourses('ECE 3', { sections: true });
+    expect(via.calls.filter(call => call === 'searchCourses')).toHaveLength(3);
+  });
+
+  it('asks again for a course search once the minute is over', async () => {
+    const { via, client, advance } = cached();
+    await client.searchCourses('ECE 3');
+    advance(HOT_READ_TTL_MS + 1);
+    await client.searchCourses('ECE 3');
+    expect(via.calls.filter(call => call === 'searchCourses')).toHaveLength(2);
+  });
+
+  it('holds a midterm listing for a minute, and tells one window from another', async () => {
+    const { via, client, advance } = cached();
+    await client.listMidterms({ course: 'ECE 385' });
+    await client.listMidterms({ course: 'ECE 385' });
+    expect(via.calls.filter(call => call === 'listMidterms')).toHaveLength(1);
+
+    await client.listMidterms({ course: 'ECE 385', from: '2026-10-01' });
+    expect(via.calls.filter(call => call === 'listMidterms')).toHaveLength(2);
+
+    advance(HOT_READ_TTL_MS + 1);
+    await client.listMidterms({ course: 'ECE 385' });
+    expect(via.calls.filter(call => call === 'listMidterms')).toHaveLength(3);
+  });
+
+  it('gives each caller its own copy, so that one of them cannot change another answer', async () => {
+    const { client } = cached();
+    const first = await client.listMidterms({});
+    first[0]!.title = 'Something else';
+    const second = await client.listMidterms({});
+    expect(second[0]!.title).not.toBe('Something else');
+  });
+
+  it('holds a room search for a minute, because it completes an option too', async () => {
+    const { via, client, advance } = cached();
+    await client.searchLocations('ECEB');
+    await client.searchLocations('ECEB');
+    expect(via.calls.filter(call => call === 'searchLocations')).toHaveLength(1);
+
+    await client.searchLocations('Everitt');
+    expect(via.calls.filter(call => call === 'searchLocations')).toHaveLength(2);
+
+    advance(HOT_READ_TTL_MS + 1);
+    await client.searchLocations('ECEB');
+    expect(via.calls.filter(call => call === 'searchLocations')).toHaveLength(3);
+  });
+
+  it('passes a building code straight through, because nothing completes on it', async () => {
+    const { via, client } = cached();
+    await client.getBuilding('ECEB');
+    await client.getBuilding('ECEB');
+    expect(via.calls.filter(call => call === 'getBuilding')).toHaveLength(2);
+  });
+});

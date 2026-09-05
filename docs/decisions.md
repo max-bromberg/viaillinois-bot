@@ -144,3 +144,24 @@ relies on for its Drizzle schema and migration files. Tests run the same files.
 Development runs from a developer's machine against a local stack, with a separate
 development Discord application and one shared test server. There is no staging copy of
 the stack on the server.
+
+## 2026-09-05: Reading back the courses somebody added is a subcommand rather than a bare name
+
+The design writes the courses commands as `/courses add`, `/courses remove` and
+`/courses`. Discord does not answer the name of a command that carries subcommands, so the
+bare name cannot be invoked, and the third way in is `/courses list`. The three are still
+one feature over one set of rows, as following, unfollowing and reading back what is
+followed are.
+
+## 2026-09-05: The exams of the week go out on the server's digest day
+
+A server that wants both the weekly digest and the exams of the week gets them together on
+one evening, and its manager has one answer to give rather than two. A separate day and
+hour for the exams would be a second setting that almost nobody would change.
+
+## 2026-09-05: The bot holds the building codes it completes, and nothing else about a building
+
+The web platform's building code table is the authority on what a code stands for, and the
+bot asks it rather than keeping a second copy of the names that would drift. What the bot
+keeps is the list of codes themselves, so that the building option has something to offer
+before anything has been typed; everything after that comes from the rooms VIA knows.

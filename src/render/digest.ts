@@ -31,13 +31,17 @@ export const REMINDER_STOP_SENTENCE =
 /** What a week with nothing in it says, so that silence is never the answer. */
 export const NOTHING_COMING_UP = 'There is nothing coming up in this week.';
 
-/** One campus day of a week, with the events that fall on it. */
-export interface DayGroup {
+/**
+ * One campus day of a week, with the things that fall on it. The week the
+ * exams message is grouped into is the same shape as the week a digest is
+ * grouped into, so both go through one function over anything with a start.
+ */
+export interface DayGroup<T = ViaEvent> {
   /** The campus date, as YYYY-MM-DD. */
   day: string;
   /** The day as a person reads it, such as Mon, Sep 7. */
   label: string;
-  events: ViaEvent[];
+  events: T[];
 }
 
 /** What a digest is drawn from: a week and the events that fall in it. */
@@ -53,8 +57,8 @@ export interface WeekListing {
  * an event at nine in the evening on campus is already tomorrow in UTC and
  * belongs in Monday's list rather than Tuesday's.
  */
-export function groupByCampusDay(events: readonly ViaEvent[]): DayGroup[] {
-  const groups = new Map<string, DayGroup>();
+export function groupByCampusDay<T extends { startTime: string }>(events: readonly T[]): DayGroup<T>[] {
+  const groups = new Map<string, DayGroup<T>>();
 
   for (const event of events) {
     const instant = toInstant(event.startTime);
@@ -100,8 +104,8 @@ function weekBody(events: readonly ViaEvent[]): string[] {
   return lines.slice(1);
 }
 
-/** How a week reads at the head of a digest. */
-function weekHeading(weekStart: string): string {
+/** How a week reads at the head of a digest, and at the head of the exams message. */
+export function weekHeading(weekStart: string): string {
   const start = toInstant(weekStart);
   const end = start ? new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000) : null;
   return end

@@ -277,6 +277,104 @@ export interface PersonalCalendar {
   rotatedAt: string;
 }
 
+/**
+ * One midterm, as the midterm endpoint answers it. The status is lowered as
+ * the membership roles are, so nothing outside this module reads the web
+ * platform's capitalisation. A midterm that is pending has a time somebody
+ * has proposed and nobody has confirmed, which is the difference the answer a
+ * student reads has to carry.
+ */
+export interface Midterm {
+  midtermId: number;
+  courseCode: string;
+  courseTitle: string | null;
+  /** What the exam is called, such as Midterm 1. */
+  title: string | null;
+  startTime: string;
+  endTime: string;
+  status: MidtermStatus;
+  /** A place written by hand, for an exam that is not in a room VIA knows. */
+  locationText: string | null;
+  building: string | null;
+  roomNumber: string | null;
+}
+
+/** The states a midterm can be in, as the web platform records them. */
+export type MidtermStatus = 'confirmed' | 'pending' | 'cancelled';
+
+/**
+ * What a midterm listing asks for. Every field is optional, because the
+ * reading router has its own defaults and the bot sends only what it was
+ * asked for. From and to are campus wall clock, as YYYY-MM-DD or as
+ * YYYY-MM-DD HH:MM:SS.
+ */
+export interface MidtermQuery {
+  /** One course, by the code the web platform stores, such as ECE 385. */
+  course?: string;
+  from?: string;
+  to?: string;
+}
+
+/** One meeting pattern of a course, as the courses poller recorded it. */
+export interface CourseSection {
+  sectionId: number;
+  /** The days the section meets on, in the letters the timetable writes. */
+  dayOfWeek: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  semester: string | null;
+  sectionType: string | null;
+  building: string | null;
+  roomNumber: string | null;
+}
+
+/** One course, with its sections when they were asked for. */
+export interface Course {
+  courseCode: string;
+  title: string | null;
+  sections: CourseSection[];
+}
+
+/** One room VIA knows, as the location endpoints answer it. */
+export interface CampusLocation {
+  locationId: number;
+  building: string;
+  roomNumber: string | null;
+  maxCapacity: number | null;
+  hasAvEquipment: boolean;
+}
+
+/** What a free room search asks for: one building and one window. */
+export interface FreeRoomQuery {
+  /** The building, by code or by name, which the web platform canonicalizes. */
+  building: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * The rooms of a building with nothing in them for a window. The building and
+ * the window come back as the web platform read them, so an answer can say
+ * which building it is actually about when somebody typed a code.
+ */
+export interface FreeRooms {
+  building: string;
+  from: string;
+  to: string;
+  locations: CampusLocation[];
+}
+
+/**
+ * A building code and what it stands for. The address is null until the
+ * university's own listing is recorded, and an answer that has none says so
+ * rather than guessing at a street number.
+ */
+export interface Building {
+  code: string;
+  name: string;
+  address: string | null;
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -317,6 +415,24 @@ export interface ViaClient {
    * asks for.
    */
   updatePersonalCalendarRsos(rsoIds: readonly number[] | null, actingDiscordUserId: string): Promise<void>;
+  /**
+   * The midterms of a course, or of every course, in a window. Both confirmed
+   * and pending exams come back, because a student deciding when to revise
+   * needs to know that a date is not settled yet.
+   */
+  listMidterms(query?: MidtermQuery): Promise<Midterm[]>;
+  /** The courses whose code or title matches what somebody typed. */
+  searchCourses(term: string, options?: { sections?: boolean }): Promise<Course[]>;
+  /** The rooms whose building or number matches what somebody typed. */
+  searchLocations(term: string): Promise<CampusLocation[]>;
+  /**
+   * The rooms of a building with no course section, no facility reservation
+   * and no VIA event overlapping the window, which is the web platform's own
+   * conflict detection rather than anything worked out here.
+   */
+  freeRooms(query: FreeRoomQuery): Promise<FreeRooms>;
+  /** What a building code stands for, or null when VIA does not know the code. */
+  getBuilding(code: string): Promise<Building | null>;
   /** Whether the web platform answers. */
   health(): Promise<boolean>;
 }
@@ -542,4 +658,120 @@ export function interestBody(interest: InterestSignal): Record<string, unknown> 
     body.discord_user_id = interest.discordUserId;
   }
   return body;
+}
+
+/**
+ * The campus answers, read the same way the event answers are: one parser per
+ * shape, shared by the HTTP client and the fake, so a fixture that stops
+ * matching the web platform breaks both.
+ */
+export function parseMidterm(body: unknown): Midterm {
+  const raw = body as Record<string, unknown>;
+  return {
+    midtermId: Number(raw.midterm_id),
+    courseCode: String(raw.course_code ?? ''),
+    courseTitle: text(raw.course_title),
+    title: text(raw.title),
+    startTime: String(raw.start_time ?? ''),
+    endTime: String(raw.end_time ?? ''),
+    // The web platform stores the status capitalised, as Confirmed, Pending
+    // and Cancelled, and the bot speaks of it in lower case, as it does with
+    // the membership roles.
+    status: String(raw.status ?? 'pending').toLowerCase() as MidtermStatus,
+    locationText: text(raw.location_text),
+    building: text(raw.building),
+    roomNumber: text(raw.room_number),
+  };
+}
+
+export function parseMidterms(body: unknown): Midterm[] {
+  const raw = (body as Record<string, unknown> | null)?.midterms;
+  return Array.isArray(raw) ? raw.map(parseMidterm) : [];
+}
+
+export function parseCourseSection(body: unknown): CourseSection {
+  const raw = body as Record<string, unknown>;
+  return {
+    sectionId: Number(raw.section_id),
+    dayOfWeek: text(raw.day_of_week),
+    startTime: text(raw.start_time),
+    endTime: text(raw.end_time),
+    semester: text(raw.semester),
+    sectionType: text(raw.section_type),
+    building: text(raw.building),
+    roomNumber: text(raw.room_number),
+  };
+}
+
+export function parseCourse(body: unknown): Course {
+  const raw = body as Record<string, unknown>;
+  const sections = Array.isArray(raw.sections) ? raw.sections : [];
+  return {
+    courseCode: String(raw.course_code ?? ''),
+    title: text(raw.title),
+    sections: sections.map(parseCourseSection),
+  };
+}
+
+export function parseCourses(body: unknown): Course[] {
+  const raw = (body as Record<string, unknown> | null)?.courses;
+  return Array.isArray(raw) ? raw.map(parseCourse) : [];
+}
+
+export function parseLocation(body: unknown): CampusLocation {
+  const raw = body as Record<string, unknown>;
+  return {
+    locationId: Number(raw.location_id),
+    building: String(raw.building ?? ''),
+    roomNumber: text(raw.room_number),
+    maxCapacity: count(raw.max_capacity),
+    // The column is a flag stored as a number, which reads as a yes or a no.
+    hasAvEquipment: Boolean(raw.has_av_equipment),
+  };
+}
+
+export function parseLocations(body: unknown): CampusLocation[] {
+  const raw = (body as Record<string, unknown> | null)?.locations;
+  return Array.isArray(raw) ? raw.map(parseLocation) : [];
+}
+
+export function parseFreeRooms(body: unknown): FreeRooms {
+  const raw = body as Record<string, unknown>;
+  return {
+    building: String(raw.building ?? ''),
+    from: String(raw.from ?? ''),
+    to: String(raw.to ?? ''),
+    locations: parseLocations(raw),
+  };
+}
+
+export function parseBuilding(body: unknown): Building {
+  const raw = (body as Record<string, unknown> | null)?.building as Record<string, unknown>;
+  return {
+    code: String(raw?.code ?? ''),
+    name: String(raw?.name ?? ''),
+    address: text(raw?.address),
+  };
+}
+
+/**
+ * The query string a midterm listing becomes. Nothing the caller did not ask
+ * for is sent, so the reading router's own defaults apply to the rest.
+ */
+export function midtermQueryParams(query: MidtermQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.course) params.set('course', query.course);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  return params;
+}
+
+/**
+ * The midterm an entry carries, or null when the entry is not about one. The
+ * three midterm kinds all carry the exam as it stands after the change, so a
+ * notice can be written without a second call.
+ */
+export function outboxMidterm(entry: OutboxEntry): Midterm | null {
+  const raw = entry.payload.midterm;
+  return raw && typeof raw === 'object' ? parseMidterm(raw) : null;
 }

@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, calendarRsosBody, eventQueryParams, interestBody,
-  parseEvent, parseEventPage, parseInterestAnswer, parseLinkSession, parseLinkedAccount,
-  parseOutboxPage, parsePersonalCalendar, parseRsoWithEvents, parseRsos,
-  type ViaClient, type ViaErrorCode, type EventPage, type EventQuery, type InterestAnswer,
-  type InterestSignal, type LinkSession, type LinkedAccount, type OutboxPage, type OutboxQuery,
-  type PersonalCalendar, type Rso, type RsoWithEvents, type ViaEvent,
+  ViaError, ViaBusyError, calendarRsosBody, eventQueryParams, interestBody, midtermQueryParams,
+  parseBuilding, parseCourses, parseEvent, parseEventPage, parseFreeRooms, parseInterestAnswer,
+  parseLinkSession, parseLinkedAccount, parseLocations, parseMidterms, parseOutboxPage,
+  parsePersonalCalendar, parseRsoWithEvents, parseRsos,
+  type ViaClient, type ViaErrorCode, type Building, type CampusLocation, type Course,
+  type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer,
+  type InterestSignal, type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery,
+  type OutboxPage, type OutboxQuery, type PersonalCalendar, type Rso, type RsoWithEvents,
+  type ViaEvent,
 } from './client.ts';
 
 /**
@@ -364,6 +367,59 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
         body: calendarRsosBody(rsoIds),
         actingDiscordUserId,
       });
+    },
+
+    /**
+     * The campus lookups. None of them carries an acting person, because none
+     * of them depends on who is asking: an exam schedule and a building code
+     * are the same for everybody.
+     */
+    async listMidterms(query: MidtermQuery = {}): Promise<Midterm[]> {
+      const params = midtermQueryParams(query).toString();
+      return parseMidterms(await request<unknown>({
+        method: 'GET',
+        path: params ? `/midterms?${params}` : '/midterms',
+      }));
+    },
+
+    async searchCourses(term: string, options: { sections?: boolean } = {}): Promise<Course[]> {
+      const params = new URLSearchParams({ query: term });
+      // The sections are a second query on the web platform, so they are asked
+      // for only where they are shown, which is the course lookup rather than
+      // the autocomplete behind it.
+      if (options.sections) params.set('sections', 'true');
+      return parseCourses(await request<unknown>({
+        method: 'GET',
+        path: `/courses?${params.toString()}`,
+      }));
+    },
+
+    async searchLocations(term: string): Promise<CampusLocation[]> {
+      const params = new URLSearchParams({ query: term });
+      return parseLocations(await request<unknown>({
+        method: 'GET',
+        path: `/locations?${params.toString()}`,
+      }));
+    },
+
+    async freeRooms(query: FreeRoomQuery): Promise<FreeRooms> {
+      const params = new URLSearchParams({
+        building: query.building,
+        from: query.from,
+        to: query.to,
+      });
+      return parseFreeRooms(await request<unknown>({
+        method: 'GET',
+        path: `/locations/free?${params.toString()}`,
+      }));
+    },
+
+    async getBuilding(code: string): Promise<Building | null> {
+      const body = await requestOrAbsent<unknown>({
+        method: 'GET',
+        path: `/buildings/${encodeURIComponent(code)}`,
+      });
+      return body === null ? null : parseBuilding(body);
     },
 
     /**

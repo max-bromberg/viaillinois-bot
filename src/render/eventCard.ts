@@ -50,14 +50,31 @@ export function rsoAddress(rsoId: number, websiteUrl: string): string {
 }
 
 /**
+ * Anything that happens somewhere, which is an event and also an exam. Both
+ * carry a room VIA knows, a place written by hand, or neither, so both are
+ * written by the same two functions rather than by two that nearly agree.
+ */
+export interface Placed {
+  building: string | null;
+  roomNumber: string | null;
+  locationText: string | null;
+}
+
+/** Anything that runs from one time to another. */
+export interface Timed {
+  startTime: string;
+  endTime: string;
+}
+
+/**
  * Where the event is. A room VIA knows is shown as its building and room, a
  * place written by hand is shown as it was written, and an event with neither
  * says so, because an empty line reads as a bot that lost the answer.
  */
-export function placeOf(event: ViaEvent): string {
-  const room = [event.building, event.roomNumber].filter(Boolean).join(' ');
+export function placeOf(place: Placed): string {
+  const room = [place.building, place.roomNumber].filter(Boolean).join(' ');
   if (room) return room;
-  if (event.locationText) return event.locationText;
+  if (place.locationText) return place.locationText;
   return 'The place has not been announced yet.';
 }
 
@@ -66,13 +83,13 @@ export function placeOf(event: ViaEvent): string {
  * ends on the same campus day, and twice when it runs past midnight, so a
  * reader is never told an event ends before it starts.
  */
-export function whenOf(event: ViaEvent): string {
-  const start = campusDateTime(event.startTime);
+export function whenOf(occasion: Timed): string {
+  const start = campusDateTime(occasion.startTime);
   if (!start) return '';
-  const end = campusDate(event.endTime) === campusDate(event.startTime)
-    ? campusTimeOfDay(event.endTime)
-    : campusDateTime(event.endTime);
-  const relative = relativeTimestamp(event.startTime);
+  const end = campusDate(occasion.endTime) === campusDate(occasion.startTime)
+    ? campusTimeOfDay(occasion.endTime)
+    : campusDateTime(occasion.endTime);
+  const relative = relativeTimestamp(occasion.startTime);
   const range = end ? `${start} to ${end}` : start;
   return relative ? `${range} (${relative})` : range;
 }

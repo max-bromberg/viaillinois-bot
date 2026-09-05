@@ -507,3 +507,125 @@ describe('the personal calendar', () => {
     expect((failure as ViaError).code).toBe('not_linked');
   });
 });
+
+/**
+ * The campus lookups, from section 6.5 of the design: the midterm schedule,
+ * the course catalogue, the rooms of a building and the building codes. All
+ * four are reads with no acting person, because none of them depends on who
+ * is asking.
+ */
+describe('the campus lookups', () => {
+  it('asks for the midterms of one course, in a window', async () => {
+    const { via, calls } = client([json(200, fixture('midterms.json'))]);
+    const midterms = await via.listMidterms({ course: 'ECE 385', from: '2026-09-06', to: '2026-09-12' });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe(`${INTERNAL_PREFIX}/midterms`);
+    expect(url.searchParams.get('course')).toBe('ECE 385');
+    expect(url.searchParams.get('from')).toBe('2026-09-06');
+    expect(url.searchParams.get('to')).toBe('2026-09-12');
+
+    expect(midterms).toHaveLength(1);
+    expect(midterms[0]!.courseCode).toBe('ECE 385');
+    expect(midterms[0]!.courseTitle).toBe('Digital Systems Laboratory');
+    expect(midterms[0]!.status).toBe('confirmed');
+    expect(midterms[0]!.building).toBe('Everitt Laboratory');
+    expect(midterms[0]!.roomNumber).toBe('151');
+  });
+
+  it('sends no filter the caller did not name', async () => {
+    const { via, calls } = client([json(200, fixture('midterms.json'))]);
+    await via.listMidterms({});
+    expect(new URL(calls[0]!.url).search).toBe('');
+  });
+
+  it('searches the course catalogue, and asks for the sections when they are wanted', async () => {
+    const { via, calls } = client([json(200, fixture('courses.json'))]);
+    const courses = await via.searchCourses('ECE 3', { sections: true });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe(`${INTERNAL_PREFIX}/courses`);
+    expect(url.searchParams.get('query')).toBe('ECE 3');
+    expect(url.searchParams.get('sections')).toBe('true');
+
+    expect(courses[0]!.courseCode).toBe('ECE 385');
+    expect(courses[0]!.sections[0]).toMatchObject({
+      sectionId: 1,
+      dayOfWeek: 'MW',
+      startTime: '10:00:00',
+      building: 'Electrical & Computer Eng Bldg',
+      roomNumber: '1002',
+    });
+  });
+
+  it('leaves the sections out when only the names were wanted', async () => {
+    const { via, calls } = client([json(200, fixture('courses.json'))]);
+    await via.searchCourses('ECE 3');
+    expect(new URL(calls[0]!.url).searchParams.get('sections')).toBe(null);
+  });
+
+  it('searches the rooms VIA knows', async () => {
+    const { via, calls } = client([json(200, fixture('locations.json'))]);
+    const locations = await via.searchLocations('ECEB');
+
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe(`${INTERNAL_PREFIX}/locations`);
+    expect(url.searchParams.get('query')).toBe('ECEB');
+    expect(locations[0]).toMatchObject({
+      locationId: 5,
+      building: 'Electrical & Computer Eng Bldg',
+      roomNumber: '1002',
+      maxCapacity: 40,
+      hasAvEquipment: true,
+    });
+  });
+
+  it('asks which rooms of a building are free in a window', async () => {
+    const { via, calls } = client([json(200, fixture('locationsFree.json'))]);
+    const free = await via.freeRooms({
+      building: 'ECEB',
+      from: '2026-09-10 18:00:00',
+      to: '2026-09-10 19:00:00',
+    });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe(`${INTERNAL_PREFIX}/locations/free`);
+    expect(url.searchParams.get('building')).toBe('ECEB');
+    expect(url.searchParams.get('from')).toBe('2026-09-10 18:00:00');
+    expect(url.searchParams.get('to')).toBe('2026-09-10 19:00:00');
+
+    expect(free.building).toBe('Electrical & Computer Eng Bldg');
+    expect(free.locations).toHaveLength(1);
+    expect(free.locations[0]!.roomNumber).toBe('1002');
+  });
+
+  it('turns a window the web platform refuses into the typed error, with its sentence', async () => {
+    const { via } = client([json(400, JSON.stringify({
+      error: 'A window can cover at most 7 days.',
+      code: 'invalid',
+    }))]);
+    const failure = await via.freeRooms({ building: 'ECEB', from: '2026-09-01', to: '2026-09-30' })
+      .then(() => null, (err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(ViaError);
+    expect((failure as ViaError).code).toBe('invalid');
+    expect((failure as ViaError).message).toBe('A window can cover at most 7 days.');
+  });
+
+  it('looks a building code up, and answers with nothing for a code VIA does not know', async () => {
+    const { via, calls } = client([
+      json(200, fixture('building.json')),
+      json(404, fixture('refusal.json')),
+    ]);
+
+    const building = await via.getBuilding('eceb');
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/buildings/eceb`);
+    expect(building).toEqual({
+      code: 'ECEB',
+      name: 'Electrical & Computer Eng Bldg',
+      address: null,
+    });
+
+    expect(await via.getBuilding('nowhere')).toBe(null);
+  });
+});

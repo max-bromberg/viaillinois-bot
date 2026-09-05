@@ -1,17 +1,18 @@
 import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
-import { reminders, subscriptions, userPreferences } from '../db/schema.ts';
+import { reminders, subscriptions, userCourses, userPreferences } from '../db/schema.ts';
 import { campusStamp } from '../render/campusTime.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
 
 /**
  * The personal feed.
  *
- * Three tables hold what one person asked the bot for. Subscriptions says
+ * Four tables hold what one person asked the bot for. Subscriptions says
  * which organizations they follow, User_Preferences says when the bot may
- * write to them and how, and Reminders holds the one off reminders they asked
- * for from an event card. They are one module because they are one thing: a
- * person's feed, which the follow commands write and the digest and reminder
- * jobs read.
+ * write to them and how, Reminders holds the one off reminders they asked for
+ * from an event card, and User_Courses holds the courses they added for exam
+ * reminders. They are one module because they are one thing: a person's feed,
+ * which the follow and courses commands write and the digest, reminder and
+ * exam jobs read.
  *
  * Two decisions are worth stating. Following everything is a flag on
  * User_Preferences rather than a row per organization, so that an organization
@@ -97,6 +98,18 @@ export interface FeedStore {
   removeReminder(reminderId: number): Promise<void>;
   /** Take back a reminder somebody asked for, answering whether there was one. */
   removeReminderFor(discordUserId: string, eventId: number): Promise<boolean>;
+  /** The courses one person added, by the code the web platform uses. */
+  courses(discordUserId: string): Promise<string[]>;
+  /** Add a course, answering whether this is new. */
+  addCourse(discordUserId: string, courseCode: string): Promise<boolean>;
+  /** Remove a course, answering whether there was one to remove. */
+  removeCourse(discordUserId: string, courseCode: string): Promise<boolean>;
+  /**
+   * Everybody who added a course, which is the question the exam reminders
+   * and the midterm notices ask: one exam has changed, and the people who
+   * added that course are the people to write to.
+   */
+  courseFollowers(courseCode: string): Promise<string[]>;
 }
 
 /** MySQL's code for a row that a unique key refused. */
@@ -285,6 +298,51 @@ export function createFeedStore(db: BotDatabase, options: FeedStoreOptions = {})
       if (held.length === 0) return false;
       await db.delete(reminders).where(eq(reminders.reminderId, held[0]!.reminderId));
       return true;
+    },
+
+    async courses(discordUserId: string): Promise<string[]> {
+      const rows = await db.select().from(userCourses)
+        .where(eq(userCourses.discordUserId, discordUserId))
+        .orderBy(asc(userCourses.courseCode));
+      return rows.map(row => row.courseCode);
+    },
+
+    /**
+     * Adding a course is the moment somebody asks the bot to write to them
+     * about an exam, so it writes the preferences row for the same reason
+     * following an organization does: the reminder lead time the exam job
+     * reads is on that row.
+     */
+    async addCourse(discordUserId: string, courseCode: string): Promise<boolean> {
+      await ensureRow(discordUserId);
+      try {
+        await db.insert(userCourses)
+          .values({ discordUserId, courseCode, createdAt: campusStamp(now()) });
+        return true;
+      } catch (err) {
+        if (!isDuplicate(err)) throw err;
+        return false;
+      }
+    },
+
+    async removeCourse(discordUserId: string, courseCode: string): Promise<boolean> {
+      const held = await db.select().from(userCourses).where(and(
+        eq(userCourses.discordUserId, discordUserId),
+        eq(userCourses.courseCode, courseCode),
+      ));
+      if (held.length === 0) return false;
+      await db.delete(userCourses).where(and(
+        eq(userCourses.discordUserId, discordUserId),
+        eq(userCourses.courseCode, courseCode),
+      ));
+      return true;
+    },
+
+    async courseFollowers(courseCode: string): Promise<string[]> {
+      const rows = await db.select().from(userCourses)
+        .where(eq(userCourses.courseCode, courseCode))
+        .orderBy(asc(userCourses.discordUserId));
+      return rows.map(row => row.discordUserId);
     },
   };
 }

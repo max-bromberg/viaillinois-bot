@@ -28,13 +28,24 @@ describe('building the application commands from the registry', () => {
   it('puts every student command at the top level and everything else under the via group', () => {
     const commands = buildCommands(features);
     expect(commands.map(c => c.name).sort()).toEqual([
-      'calendar', 'event', 'events', 'feed', 'follow', 'following', 'link', 'rso', 'unfollow',
-      'unlink', VIA_GROUP,
+      'building', 'calendar', 'course', 'courses', 'event', 'events', 'feed', 'follow',
+      'following', 'link', 'midterms', 'rooms', 'rso', 'unfollow', 'unlink', VIA_GROUP,
     ]);
     for (const command of commands) {
       expect(command.type).toBe(ApplicationCommandType.ChatInput);
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.description.length).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('gives the courses group the add, remove and list subcommands', () => {
+    // Discord does not answer the name of a group on its own, so reading the
+    // courses back is a subcommand rather than the bare name.
+    const group = buildCommands(features).find(c => c.name === 'courses')!;
+    expect(group.options!.map(o => o.name)).toEqual(['add', 'remove', 'list']);
+    for (const option of group.options!) {
+      expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
+      expect(option.options!.map(one => one.name)).toEqual(['course']);
     }
   });
 
@@ -273,6 +284,6 @@ describe('putting the commands to Discord', () => {
       applicationId: '123456789012345678',
       commands: buildCommands(features),
     });
-    expect(count).toBe(11);
+    expect(count).toBe(16);
   });
 });

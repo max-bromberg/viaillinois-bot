@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import {
-  ViaError, parseEvent, parseLinkSession, parseLinkedAccount, parseOutboxEntry,
-  parsePersonalCalendar, parseRsos,
-  type ViaClient, type EventPage, type EventQuery, type InterestAnswer, type InterestSignal,
-  type LinkSession, type LinkedAccount, type OutboxEntry, type OutboxPage, type OutboxQuery,
-  type PersonalCalendar, type Rso, type RsoWithEvents, type ViaEvent,
+  ViaError, parseBuilding, parseCourses, parseEvent, parseLinkSession, parseLinkedAccount,
+  parseLocations, parseMidterms, parseOutboxEntry, parsePersonalCalendar, parseRsos,
+  type ViaClient, type Building, type CampusLocation, type Course, type EventPage,
+  type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer, type InterestSignal,
+  type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery, type OutboxEntry,
+  type OutboxPage, type OutboxQuery, type PersonalCalendar, type Rso, type RsoWithEvents,
+  type ViaEvent,
 } from './client.ts';
 
 /**
@@ -58,6 +60,15 @@ const RECORDED_CALENDAR = (fixture('eventCalendar.json') as { body: string }).bo
 /** The recorded personal calendar, whose address shape every answer follows. */
 const CALENDAR_TEMPLATE = parsePersonalCalendar(fixture('calendars.personal.json'));
 
+/** The recorded midterm, which is what the fake lists until a test seeds more. */
+const RECORDED_MIDTERM = parseMidterms(fixture('midterms.json'))[0]!;
+/** The recorded course, with the section the contract test recorded on it. */
+const RECORDED_COURSE = parseCourses(fixture('courses.json'))[0]!;
+/** The recorded room, which is what the fake searches until a test seeds more. */
+const RECORDED_LOCATION = parseLocations(fixture('locations.json'))[0]!;
+/** The recorded building, whose code and name every building answer follows. */
+const RECORDED_BUILDING = parseBuilding(fixture('building.json'));
+
 /**
  * One recorded entry per outbox kind, as the web platform writes them. A test
  * that seeds an entry seeds the recorded one for that kind and changes what it
@@ -68,6 +79,9 @@ const RECORDED_OUTBOX = new Map<string, OutboxEntry>(
     .map(raw => parseOutboxEntry(raw))
     .map(entry => [entry.kind, entry]),
 );
+
+/** The longest window the reading router's free room search will look at. */
+const MAX_FREE_ROOM_DAYS = 7;
 
 export interface OpenedSession {
   discordUserId: string;
@@ -122,6 +136,27 @@ export interface FakeViaClient extends ViaClient {
   removeLink(discordUserId: string): void;
   /** The calendar the fake holds for a person, or null when they have none. */
   personalCalendarOf(discordUserId: string): SeededPersonalCalendar | null;
+  /** Add or replace a midterm, filling anything unnamed from the recorded one. */
+  seedMidterm(overrides?: Partial<Midterm>): Midterm;
+  /** Forget every midterm, for a test about a term with no exams recorded. */
+  clearMidterms(): void;
+  /** Add or replace a course, filling anything unnamed from the recorded one. */
+  seedCourse(overrides?: Partial<Course>): Course;
+  /** Forget every course, for a test about a catalogue that has not been polled. */
+  clearCourses(): void;
+  /** Add or replace a room, filling anything unnamed from the recorded one. */
+  seedLocation(overrides?: Partial<CampusLocation>): CampusLocation;
+  /** Forget every room, for a test about a building with nothing recorded in it. */
+  clearLocations(): void;
+  /** Add or replace a building code, filling anything unnamed from the recorded one. */
+  seedBuilding(overrides?: Partial<Building>): Building;
+  /**
+   * Say that a room is in use, so that a free room search leaves it out. The
+   * web platform works this out from course sections, facility reservations
+   * and VIA events, and the fake takes the answer as given, because what a
+   * command needs is a room that is free and a room that is not.
+   */
+  occupyRoom(locationId: number): void;
   /** Whether the web platform answers its health endpoint. */
   setHealthy(healthy: boolean): void;
   /** Make the next call, whichever it is, throw the given error. */
@@ -147,6 +182,11 @@ export function createFakeViaClient(): FakeViaClient {
   /** Who has marked interest in each event, so that one person counts once. */
   const interested = new Map<number, Set<string>>();
   const calendars = new Map<string, SeededPersonalCalendar>();
+  const midterms = new Map<number, Midterm>([[RECORDED_MIDTERM.midtermId, { ...RECORDED_MIDTERM }]]);
+  const courses = new Map<string, Course>([[RECORDED_COURSE.courseCode, { ...RECORDED_COURSE }]]);
+  const locations = new Map<number, CampusLocation>([[RECORDED_LOCATION.locationId, { ...RECORDED_LOCATION }]]);
+  const buildings = new Map<string, Building>([[RECORDED_BUILDING.code, { ...RECORDED_BUILDING }]]);
+  const occupied = new Set<number>();
   let healthy = true;
   let nextFailure: Error | null = null;
   let sessionCounter = 0;
@@ -194,6 +234,33 @@ export function createFakeViaClient(): FakeViaClient {
       .sort((left, right) => instantOf(left.startTime) - instantOf(right.startTime));
   }
 
+  /**
+   * A wall clock reading in the shape the reading router parses, or the
+   * refusal it answers with. The fake applies the rule rather than the
+   * spelling: what a command has to handle is the refusal.
+   */
+  const WALL_CLOCK = /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2})?$/;
+
+  function wallClock(raw: string): string {
+    if (!WALL_CLOCK.test(raw)) {
+      throw new ViaError(
+        'A date has to be written as YYYY-MM-DD, or as YYYY-MM-DD HH:MM:SS for a time of day.',
+        400,
+        'invalid',
+      );
+    }
+    return raw.replace('T', ' ');
+  }
+
+  /**
+   * The building a search term names, expanded from a code where it is one,
+   * exactly as the reading router does, so that ECEB and the full name reach
+   * the same rooms.
+   */
+  function canonicalBuilding(term: string): string {
+    return buildings.get(term.trim().toUpperCase())?.name ?? term.trim();
+  }
+
   return {
     sessions,
     calls,
@@ -230,6 +297,50 @@ export function createFakeViaClient(): FakeViaClient {
       const event: ViaEvent = { ...RECORDED_EVENT, ...overrides };
       events.set(event.eventId, event);
       return event;
+    },
+
+    seedMidterm(overrides = {}) {
+      const midterm: Midterm = { ...RECORDED_MIDTERM, ...overrides };
+      midterms.set(midterm.midtermId, midterm);
+      return midterm;
+    },
+
+    clearMidterms() {
+      midterms.clear();
+    },
+
+    seedCourse(overrides = {}) {
+      const course: Course = {
+        ...RECORDED_COURSE,
+        ...overrides,
+        sections: overrides.sections ?? RECORDED_COURSE.sections.map(section => ({ ...section })),
+      };
+      courses.set(course.courseCode, course);
+      return course;
+    },
+
+    clearCourses() {
+      courses.clear();
+    },
+
+    seedLocation(overrides = {}) {
+      const location: CampusLocation = { ...RECORDED_LOCATION, ...overrides };
+      locations.set(location.locationId, location);
+      return location;
+    },
+
+    clearLocations() {
+      locations.clear();
+    },
+
+    seedBuilding(overrides = {}) {
+      const building: Building = { ...RECORDED_BUILDING, ...overrides };
+      buildings.set(building.code, building);
+      return building;
+    },
+
+    occupyRoom(locationId) {
+      occupied.add(locationId);
     },
 
     clearRsos() {
@@ -288,6 +399,15 @@ export function createFakeViaClient(): FakeViaClient {
       for (const rso of RECORDED_RSOS) rsos.set(rso.rsoId, { ...rso });
       events.clear();
       events.set(RECORDED_EVENT.eventId, { ...RECORDED_EVENT });
+      midterms.clear();
+      midterms.set(RECORDED_MIDTERM.midtermId, { ...RECORDED_MIDTERM });
+      courses.clear();
+      courses.set(RECORDED_COURSE.courseCode, { ...RECORDED_COURSE });
+      locations.clear();
+      locations.set(RECORDED_LOCATION.locationId, { ...RECORDED_LOCATION });
+      buildings.clear();
+      buildings.set(RECORDED_BUILDING.code, { ...RECORDED_BUILDING });
+      occupied.clear();
     },
 
     async openLinkSession(discordUserId) {
@@ -478,6 +598,106 @@ export function createFakeViaClient(): FakeViaClient {
         throw new ViaError('This VIA account has no personal calendar.', 404, 'not_found');
       }
       calendars.set(actingDiscordUserId, { ...held, rsoIds: rsoIds === null ? null : [...rsoIds] });
+    },
+
+    /**
+     * The exams of a course, or of a window, in the order they happen. A
+     * cancelled exam is left out, which is what the reading router's own
+     * condition over the status does.
+     */
+    async listMidterms(query: MidtermQuery = {}): Promise<Midterm[]> {
+      throwIfInstructed();
+      calls.push('listMidterms');
+      const from = query.from ? Date.parse(`${query.from.slice(0, 10)}T00:00:00-05:00`) : null;
+      const to = query.to ? Date.parse(`${query.to.slice(0, 10)}T23:59:59-05:00`) : null;
+
+      return [...midterms.values()]
+        .filter(midterm => midterm.status !== 'cancelled')
+        .filter(midterm => !query.course || midterm.courseCode === query.course)
+        .filter(midterm => from === null || Date.parse(midterm.startTime) >= from)
+        .filter(midterm => to === null || Date.parse(midterm.startTime) <= to)
+        .sort((left, right) => Date.parse(left.startTime) - Date.parse(right.startTime))
+        .map(midterm => ({ ...midterm }));
+    },
+
+    /**
+     * A search box that lists the whole catalogue before a key is pressed is
+     * not a search box, so an empty term answers nothing, as the reading
+     * router does.
+     */
+    async searchCourses(term: string, options: { sections?: boolean } = {}): Promise<Course[]> {
+      throwIfInstructed();
+      calls.push('searchCourses');
+      const typed = term.trim().toLowerCase();
+      if (!typed) return [];
+
+      return [...courses.values()]
+        .filter(course => course.courseCode.toLowerCase().includes(typed)
+          || (course.title ?? '').toLowerCase().includes(typed))
+        .sort((left, right) => left.courseCode.localeCompare(right.courseCode))
+        .map(course => ({
+          ...course,
+          sections: options.sections ? course.sections.map(section => ({ ...section })) : [],
+        }));
+    },
+
+    async searchLocations(term: string): Promise<CampusLocation[]> {
+      throwIfInstructed();
+      calls.push('searchLocations');
+      const typed = term.trim();
+      if (!typed) return [];
+      const wanted = canonicalBuilding(typed).toLowerCase();
+
+      return [...locations.values()]
+        .filter(location => location.building.toLowerCase().includes(wanted)
+          || (location.roomNumber ?? '').toLowerCase().includes(wanted))
+        .map(location => ({ ...location }));
+    },
+
+    /**
+     * The rooms of a building with nothing in them, with the two refusals the
+     * reading router answers with: a date it cannot parse, and a window longer
+     * than the seven days its day by day scan is bounded to.
+     */
+    async freeRooms(query: FreeRoomQuery): Promise<FreeRooms> {
+      throwIfInstructed();
+      calls.push('freeRooms');
+      if (!query.building.trim()) {
+        throw new ViaError('A building is required, by code or by name.', 400, 'invalid');
+      }
+      const from = wallClock(query.from);
+      const to = wallClock(query.to);
+      if (from >= to) {
+        throw new ViaError(
+          'A window needs a from and a to, and the to has to come after the from.',
+          400,
+          'invalid',
+        );
+      }
+      const days = (Date.parse(`${to.slice(0, 10)}T00:00:00Z`)
+        - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000;
+      if (days > MAX_FREE_ROOM_DAYS) {
+        throw new ViaError(`A window can cover at most ${MAX_FREE_ROOM_DAYS} days.`, 400, 'invalid');
+      }
+
+      const building = canonicalBuilding(query.building);
+      return {
+        building,
+        from,
+        to,
+        locations: [...locations.values()]
+          .filter(location => location.building === building)
+          .filter(location => !occupied.has(location.locationId))
+          .sort((left, right) => (left.roomNumber ?? '').localeCompare(right.roomNumber ?? ''))
+          .map(location => ({ ...location })),
+      };
+    },
+
+    async getBuilding(code: string): Promise<Building | null> {
+      throwIfInstructed();
+      calls.push('getBuilding');
+      const held = buildings.get(code.trim().toUpperCase());
+      return held ? { ...held } : null;
     },
 
     async health() {

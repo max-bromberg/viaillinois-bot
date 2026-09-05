@@ -8,21 +8,27 @@ import {
 } from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the identity, reading, setup, feed and proactive features the first three increments have', () => {
+  it('registers the identity, reading, setup, feed, campus and proactive features the first four increments have', () => {
     expect(features.map(f => f.id).sort()).toEqual([
       'announce.changes',
       'announce.dayof',
       'announce.digest',
+      'announce.exams',
       'announce.new',
+      'campus.building',
+      'campus.course',
+      'campus.rooms',
       'events.detail',
       'events.list',
       'feed.calendar',
+      'feed.courses',
       'feed.digest',
       'feed.follow',
       'feed.reminders',
       'identity.link',
       'identity.unlink',
       'living.thisweek',
+      'midterms.lookup',
       'mirror.scheduled',
       'rsos.detail',
       'setup.configure',
@@ -261,6 +267,50 @@ describe('the feature registry', () => {
 
   it('needs the permission to pin for the message it keeps pinned', () => {
     expect(featureById('living.thisweek').requiredPermissions).toContain('ManageMessages');
+  });
+
+  it('lets anybody look up an exam, a free room, a course and a building, in every context', () => {
+    for (const id of ['midterms.lookup', 'campus.rooms', 'campus.course', 'campus.building']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('command');
+      expect(feature.tier).toBe('read');
+      expect(feature.defaultEnabled).toBe(true);
+      expect(feature.requiredPermissions).toEqual([]);
+      expect([...feature.contexts].sort()).toEqual(['botDm', 'guild', 'privateChannel']);
+      expect(feature.command).toBeDefined();
+    }
+  });
+
+  it('completes the course on the exam lookup and the building on the free room search', () => {
+    const midterms = featureById('midterms.lookup').command!;
+    expect(midterms.name).toBe('midterms');
+    expect(midterms.options![0]).toMatchObject({ name: 'course', required: true, autocomplete: true });
+
+    const rooms = featureById('campus.rooms').command!;
+    expect(rooms.name).toBe('rooms');
+    expect(rooms.options![0]).toMatchObject({ name: 'building', required: true, autocomplete: true });
+    // The window is a date and two hours, and a command run with none of them
+    // is the next hour, which is what somebody looking for a room now means.
+    expect(rooms.options!.map(option => option.name)).toEqual(['building', 'date', 'from', 'to']);
+  });
+
+  it('puts the courses somebody added behind a link, under a group of their own', () => {
+    const feature = featureById('feed.courses');
+    expect(feature.category).toBe('command');
+    expect(feature.tier).toBe('linked');
+    expect([...feature.contexts].sort()).toEqual(['botDm', 'guild', 'privateChannel']);
+    expect(feature.command).toMatchObject({ group: 'courses', name: 'add' });
+    expect(feature.command!.alternateNames!.map(alternate => alternate.name)).toEqual(['remove', 'list']);
+    expect(feature.command!.options![0]).toMatchObject({ name: 'course', autocomplete: true });
+  });
+
+  it('posts the exams of the week in the channel bound to exam notices', () => {
+    const feature = featureById('announce.exams');
+    expect(feature.category).toBe('proactive');
+    expect([...feature.channelPurposes]).toEqual(['exams']);
+    expect([...feature.contexts]).toEqual(['guild']);
+    expect(feature.command).toBeUndefined();
+    expect([...feature.requiredPermissions].sort()).toEqual(['SendMessages', 'ViewChannel']);
   });
 
   it('lists the five channel purposes the design names', () => {

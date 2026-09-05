@@ -400,3 +400,111 @@ describe('the personal calendar', () => {
     expect((failure as ViaError).code).toBe('not_found');
   });
 });
+
+/**
+ * The campus lookups through the fake.
+ *
+ * Three rules the web platform applies are modelled here rather than served
+ * from a file, because a command has to be tested against them: a cancelled
+ * exam is not listed at all, a course search with nothing typed answers
+ * nothing, and a free room window is refused when it is malformed or longer
+ * than the seven days the reading router allows.
+ */
+describe('the campus lookups through the fake', () => {
+  it('lists the midterms of a course, confirmed and pending alike', async () => {
+    const via = createFakeViaClient();
+    via.clearMidterms();
+    via.seedMidterm({ midtermId: 20, courseCode: 'ECE 385', status: 'confirmed' });
+    via.seedMidterm({ midtermId: 21, courseCode: 'ECE 385', title: 'Midterm 2', status: 'pending' });
+    via.seedMidterm({ midtermId: 22, courseCode: 'ECE 391', status: 'confirmed' });
+
+    const midterms = await via.listMidterms({ course: 'ECE 385' });
+    expect(midterms.map(one => one.midtermId)).toEqual([20, 21]);
+  });
+
+  it('leaves a cancelled exam out of every listing, as the reading router does', async () => {
+    const via = createFakeViaClient();
+    via.clearMidterms();
+    via.seedMidterm({ midtermId: 20, status: 'cancelled' });
+    expect(await via.listMidterms({})).toEqual([]);
+  });
+
+  it('lists the midterms of a window, in the order they happen', async () => {
+    const via = createFakeViaClient();
+    via.clearMidterms();
+    via.seedMidterm({ midtermId: 21, startTime: '2026-10-08T19:00:00-05:00' });
+    via.seedMidterm({ midtermId: 20, startTime: '2026-10-01T19:00:00-05:00' });
+
+    const inside = await via.listMidterms({ from: '2026-09-28', to: '2026-10-04' });
+    expect(inside.map(one => one.midtermId)).toEqual([20]);
+    expect((await via.listMidterms({})).map(one => one.midtermId)).toEqual([20, 21]);
+  });
+
+  it('completes a course by code and by title, and answers nothing before anything is typed', async () => {
+    const via = createFakeViaClient();
+    expect(await via.searchCourses('')).toEqual([]);
+    expect((await via.searchCourses('385'))[0]!.courseCode).toBe('ECE 385');
+    expect((await via.searchCourses('digital systems'))[0]!.courseCode).toBe('ECE 385');
+    expect(await via.searchCourses('rhetoric')).toEqual([]);
+  });
+
+  it('carries the sections only when they were asked for', async () => {
+    const via = createFakeViaClient();
+    expect((await via.searchCourses('385'))[0]!.sections).toEqual([]);
+    const withSections = await via.searchCourses('385', { sections: true });
+    expect(withSections[0]!.sections[0]!.roomNumber).toBe('1002');
+  });
+
+  it('finds a room by its building name and by the code that stands for it', async () => {
+    const via = createFakeViaClient();
+    expect(await via.searchLocations('')).toEqual([]);
+    expect((await via.searchLocations('ECEB'))[0]!.roomNumber).toBe('1002');
+    expect((await via.searchLocations('Electrical'))[0]!.locationId).toBe(5);
+  });
+
+  it('answers with the rooms of a building that nothing is using', async () => {
+    const via = createFakeViaClient();
+    const free = await via.freeRooms({
+      building: 'ECEB',
+      from: '2026-09-10 18:00:00',
+      to: '2026-09-10 19:00:00',
+    });
+    expect(free.building).toBe('Electrical & Computer Eng Bldg');
+    expect(free.locations.map(one => one.locationId)).toEqual([5]);
+
+    via.occupyRoom(5);
+    const after = await via.freeRooms({
+      building: 'ECEB',
+      from: '2026-09-10 18:00:00',
+      to: '2026-09-10 19:00:00',
+    });
+    expect(after.locations).toEqual([]);
+  });
+
+  it('refuses a window longer than the seven days the reading router allows', async () => {
+    const via = createFakeViaClient();
+    const failure = await via.freeRooms({ building: 'ECEB', from: '2026-09-01', to: '2026-09-30' })
+      .then(() => null, (err: unknown) => err);
+    expect(failure).toBeInstanceOf(ViaError);
+    expect((failure as ViaError).code).toBe('invalid');
+    expect((failure as ViaError).message).toContain('7 days');
+  });
+
+  it('refuses a date that is not written the way the reading router parses', async () => {
+    const via = createFakeViaClient();
+    const failure = await via.freeRooms({ building: 'ECEB', from: 'tomorrow', to: 'later' })
+      .then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('invalid');
+    expect((failure as ViaError).message).toContain('YYYY-MM-DD');
+  });
+
+  it('says what a building code stands for, and nothing for a code VIA does not know', async () => {
+    const via = createFakeViaClient();
+    expect(await via.getBuilding('eceb')).toEqual({
+      code: 'ECEB',
+      name: 'Electrical & Computer Eng Bldg',
+      address: null,
+    });
+    expect(await via.getBuilding('ZZZ')).toBe(null);
+  });
+});

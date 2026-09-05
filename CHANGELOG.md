@@ -100,3 +100,31 @@ at the top that the bump script turns into the next release.
   interface, the HTTP implementation and the fake, with hand written fixtures.
 - The health endpoint reports when the scheduler last made a pass, for the same reason it
   reports the outbox consumer's cursor.
+- The campus endpoints on the web platform client, in all three of the interface, the HTTP
+  implementation and the fake: the midterm listing, the course search with its sections,
+  the room search, the free rooms of a building and the building codes. The course search
+  and the midterm listing join the hot read cache, because a course autocomplete fires on
+  every keystroke and the answer to when the next exam is does not depend on who is
+  asking.
+- The midterms command: a course by autocomplete, answered with the exams VIA has for it,
+  their rooms and their times, and a sentence saying how many of those times are still
+  pending confirmation.
+- The courses commands: courses add, courses remove and courses list over User_Courses,
+  with the catalogue completing a course being added and the person's own courses
+  completing one being removed.
+- The exam reminders: a direct message before each confirmed exam of a course somebody
+  added, at the lead time they chose, through Deliveries and ending with the way to stop
+  them. Nobody asks for one of these individually, because adding a course is the asking.
+- The midterm outbox handlers for midterm.confirmed, midterm.updated and
+  midterm.cancelled, which write one direct message to each person who added the course,
+  keyed by the outbox entry so that an entry handled twice writes once. These are the
+  first outbox entries that reach a person rather than a server.
+- Exams this week: a proactive feature a server switches on, posting the confirmed exams
+  of the coming week in the channel bound to exam notices, grouped by day, on the same day
+  and hour as that server's weekly digest.
+- The campus lookups: the rooms command for the free rooms of a building over a window
+  given as a date and two hours, or the next hour when none is given; the course command
+  for the sections of a course, their days, their hours and their rooms; and the building
+  command for what a code stands for, which says in a sentence that no address is recorded
+  rather than guessing at one. A window the web platform refuses, such as one longer than
+  seven days or a date it cannot read, is shown as the sentence it refused with.

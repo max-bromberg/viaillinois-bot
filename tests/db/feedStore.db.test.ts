@@ -174,4 +174,53 @@ describe('the personal feed', () => {
       expect(await store().removeReminderFor(ADA, 10)).toBe(false);
     });
   });
+
+  /**
+   * The courses somebody added for exam reminders. The exam reminder job and
+   * the midterm outbox handlers both ask the question the other way round,
+   * which is who added a course, so that is a question the database answers
+   * rather than one the bot works out by reading every row.
+   */
+  describe('courses', () => {
+    it('has nobody following any course to begin with', async () => {
+      expect(await store().courses(ADA)).toEqual([]);
+    });
+
+    it('records a course once, however many times it is added', async () => {
+      expect(await store().addCourse(ADA, 'ECE 385')).toBe(true);
+      expect(await store().addCourse(ADA, 'ECE 385')).toBe(false);
+      expect(await store().courses(ADA)).toEqual(['ECE 385']);
+    });
+
+    it('answers the courses of one person in the order they read in', async () => {
+      await store().addCourse(ADA, 'ECE 391');
+      await store().addCourse(ADA, 'ECE 385');
+      await store().addCourse(GRACE, 'ECE 220');
+      expect(await store().courses(ADA)).toEqual(['ECE 385', 'ECE 391']);
+      expect(await store().courses(GRACE)).toEqual(['ECE 220']);
+    });
+
+    it('says whether there was a course to remove', async () => {
+      await store().addCourse(ADA, 'ECE 385');
+      expect(await store().removeCourse(ADA, 'ECE 385')).toBe(true);
+      expect(await store().removeCourse(ADA, 'ECE 385')).toBe(false);
+      expect(await store().courses(ADA)).toEqual([]);
+    });
+
+    it('answers who added a course, which is what a notice about an exam needs', async () => {
+      await store().addCourse(ADA, 'ECE 385');
+      await store().addCourse(GRACE, 'ECE 385');
+      await store().addCourse(GRACE, 'ECE 391');
+
+      expect((await store().courseFollowers('ECE 385')).sort()).toEqual([ADA, GRACE].sort());
+      expect(await store().courseFollowers('ECE 391')).toEqual([GRACE]);
+      expect(await store().courseFollowers('ECE 220')).toEqual([]);
+    });
+
+    it('writes the preferences row, so that a person with a course has a lead time', async () => {
+      await store().addCourse(ADA, 'ECE 385');
+      const [row] = await db.select().from(userPreferences);
+      expect(row!.discordUserId).toBe(ADA);
+    });
+  });
 });
