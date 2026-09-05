@@ -461,3 +461,49 @@ describe('recording interest in an event', () => {
     expect(failure).toBeInstanceOf(ViaError);
   });
 });
+
+/**
+ * The personal calendar, from section 6 of the companion specification. The
+ * address carries a token the web platform stores hashed, so asking for the
+ * calendar again rotates the token, and the organizations it carries are
+ * updated on their own whenever the person's follows change.
+ */
+describe('the personal calendar', () => {
+  const ADA = '204255221017214977';
+
+  it('creates or rotates the calendar for the acting person, with the organizations they follow', async () => {
+    const { via, calls } = client([json(200, fixture('calendars.personal.json'))]);
+    const calendar = await via.createPersonalCalendar([3, 7], ADA);
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/calendars/personal`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ rso_ids: [3, 7] });
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe(ADA);
+    expect(calendar.address).toContain('/calendar/personal/');
+    expect(calendar.rotatedAt).toBe(JSON.parse(fixture('calendars.personal.json')).rotated_at);
+  });
+
+  it('says that a person follows every organization by sending no set at all', async () => {
+    const { via, calls } = client([json(200, fixture('calendars.personal.json'))]);
+    await via.createPersonalCalendar(null, ADA);
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ rso_ids: null });
+  });
+
+  it('updates the organizations a calendar carries without rotating its token', async () => {
+    const { via, calls } = client([json(200, fixture('calendars.personalRsos.json'))]);
+    await via.updatePersonalCalendarRsos([3], ADA);
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/calendars/personal/rsos`);
+    expect(calls[0]!.method).toBe('PUT');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ rso_ids: [3] });
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe(ADA);
+  });
+
+  it('turns a refusal into the typed error its code names', async () => {
+    const { via } = client([json(403, fixture('error.not_linked.json'))]);
+    const failure = await via.createPersonalCalendar(null, ADA)
+      .then(() => null, (err: unknown) => err);
+    expect(failure).toBeInstanceOf(ViaError);
+    expect((failure as ViaError).code).toBe('not_linked');
+  });
+});

@@ -2,9 +2,18 @@ import { featureById } from '../features/registry.ts';
 import { renderEventCard, renderRsoCard, EVENT_BUTTON, RSO_BUTTON } from '../render/eventCard.ts';
 import { renderEventList, PAGE_SIZE } from '../render/eventList.ts';
 import { campusDate, windowRange, type ListingWindow } from '../render/campusTime.ts';
-import { ViaBusyError, ViaError, type EventQuery, type ViaEvent } from '../via/client.ts';
-import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
+import { ViaError, type EventQuery, type ViaEvent } from '../via/client.ts';
+import { followRso, toggleReminder } from './feed.ts';
+import { answerFor, identifier, requireLink, NOT_AN_RSO_MESSAGE, NO_SUCH_RSO_MESSAGE } from './shared.ts';
+import type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
 import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.ts';
+
+// The answers more than one command gives are written once in shared.ts and
+// reached from here as well, because these are the names they were first
+// published under.
+export {
+  answerFor, LINK_NEEDED_MESSAGE, NOT_AN_RSO_MESSAGE, NO_SUCH_RSO_MESSAGE, UNREACHABLE_MESSAGE,
+} from './shared.ts';
 
 /**
  * The three commands a student reads VIA with: what is coming up, one event,
@@ -20,9 +29,9 @@ import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.
  *
  * Interest is recorded on VIA the moment the button is pressed, because it is
  * what replaced the RSVPs the web platform removed and the count on the card
- * is the number a board reads. Reminders and following arrive in the third
- * increment, and until they do their buttons say so in one sentence rather
- * than pretending to work.
+ * is the number a board reads. The reminder button and the follow button write
+ * to the person's own feed, so both of them are answered by the feed module,
+ * which is what the settings panel and the digest read.
  */
 
 const listFeature = featureById('events.list');
@@ -35,29 +44,14 @@ const MAX_COMPLETIONS = 25;
 /** How many events to look through when completing a title. */
 const COMPLETION_POOL = 100;
 
-export const NOT_AN_RSO_MESSAGE =
-  'Please choose an organization from the list Discord offers as you type, rather than typing a name of your own.';
-
 export const NOT_AN_EVENT_MESSAGE =
   'Please choose an event from the list Discord offers as you type, rather than typing a title of your own.';
 
 export const NO_SUCH_EVENT_MESSAGE =
   'VIA does not have an event by that name any more. It may have been deleted since Discord last completed it.';
 
-export const NO_SUCH_RSO_MESSAGE =
-  'VIA does not have an organization by that name. It may have been removed since Discord last completed it.';
-
 export const EVENT_GONE_MESSAGE =
   'VIA does not have that event any more, so there is nothing to answer with. It was probably deleted after this message was posted.';
-
-export const UNREACHABLE_MESSAGE =
-  'VIA is not answering right now, so there is nothing to show. Please try again in a few minutes.';
-
-export const LINK_NEEDED_MESSAGE =
-  'This needs a VIA account, so please link this Discord account first and then try again.';
-
-export const NOT_READY_MESSAGE =
-  'That part of the bot is not ready yet, and it arrives in the next release. Nothing has been saved.';
 
 /** What somebody reads once their interest has been recorded on VIA. */
 export function interestedMessage(title: string, interestCount: number): string {
@@ -65,27 +59,6 @@ export function interestedMessage(title: string, interestCount: number): string 
     ? 'You are the first person to say so.'
     : `${interestCount} people are interested so far.`;
   return `You are marked as interested in ${title}. ${others}`;
-}
-
-/** The button that sends somebody who is not linked to the link command. */
-const LINK_BUTTON: Reply['components'] = [{
-  kind: 'row',
-  components: [{ kind: 'button', style: 'primary', label: 'Link my account', customId: 'identity:link' }],
-}];
-
-/** Turn whatever went wrong into the sentence the person reads. */
-export function answerFor(err: unknown): Reply {
-  if (err instanceof ViaBusyError) {
-    return { content: `VIA is busy right now. Please try again ${describeWait(err.retryAfterSeconds)}.` };
-  }
-  if (err instanceof ViaError) return { content: UNREACHABLE_MESSAGE };
-  throw err;
-}
-
-/** A whole number an option carries, or null when it is anything else. */
-function identifier(value: unknown): number | null {
-  const text = String(value ?? '').trim();
-  return /^\d+$/.test(text) ? Number(text) : null;
 }
 
 const WINDOWS: ListingWindow[] = ['today', 'thisweek', 'nextweek', 'thismonth'];
@@ -313,18 +286,6 @@ export const eventCommand: CommandHandler = {
   },
 };
 
-/** Whether the person pressing a button has a VIA account, and the answer if they do not. */
-async function requireLink(interaction: Interaction, context: CommandContext): Promise<Reply | null> {
-  let link;
-  try {
-    link = await context.via.getLink(interaction.userId);
-  } catch (err) {
-    return answerFor(err);
-  }
-  if (link) return null;
-  return { content: LINK_NEEDED_MESSAGE, components: LINK_BUTTON };
-}
-
 /**
  * The buttons on the event card. Each answers the person who pressed it and
  * nobody else, because a card can sit in a channel a whole server reads and
@@ -388,7 +349,16 @@ export const eventComponent: ComponentHandler = {
     if (customId === EVENT_BUTTON.remind(eventId)) {
       const needsLink = await requireLink(interaction, context);
       if (needsLink) return needsLink;
-      return { content: NOT_READY_MESSAGE };
+
+      let event;
+      try {
+        event = await context.via.getEvent(eventId, interaction.userId);
+      } catch (err) {
+        if (err instanceof ViaError && err.code === 'not_found') return { content: EVENT_GONE_MESSAGE };
+        return answerFor(err);
+      }
+      if (!event) return { content: EVENT_GONE_MESSAGE };
+      return toggleReminder(interaction, context, event);
     }
 
     return { content: EVENT_GONE_MESSAGE };
@@ -435,6 +405,15 @@ export const rsoComponent: ComponentHandler = {
 
     const needsLink = await requireLink(interaction, context);
     if (needsLink) return needsLink;
-    return { content: NOT_READY_MESSAGE };
+
+    let rsos;
+    try {
+      rsos = await context.via.listRsos();
+    } catch (err) {
+      return answerFor(err);
+    }
+    const rso = rsos.find(one => one.rsoId === rsoId);
+    if (!rso) return { content: NO_SUCH_RSO_MESSAGE };
+    return followRso(interaction, context, rso.rsoId, rso.name);
   },
 };

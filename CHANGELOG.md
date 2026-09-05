@@ -70,3 +70,33 @@ at the top that the bump script turns into the next release.
   it deletes the rows that say where they are.
 - The health endpoint reports how far through the outbox the consumer has read and when it
   last looked, so the cutover can see that it is alive.
+- The job scheduler: one clock in campus time, with the hour each job last ran for recorded
+  in the new Job_Runs table, so a bot that was down over a digest hour sends that digest
+  when it returns rather than skipping the week or sending it twice. A job whose work is
+  due at a moment rather than in an hour, such as a reminder, runs on every pass instead.
+- Following: the follow, unfollow and following commands over Subscriptions, with
+  following every organization in ECE as a flag rather than a row per organization, and
+  the Follow button on the organization card doing the same.
+- The feed settings command, which opens a panel over User_Preferences: the day and hour
+  the weekly digest arrives, how far ahead reminders arrive, and the two switches for the
+  direct messages and for the feedback the sixth increment will ask for.
+- The personal digest and the personal reminders: a weekly direct message listing the
+  coming week for the organizations somebody follows, grouped by day, and a direct message
+  before each event they asked to be reminded of, which the Remind me button on the event
+  card now records. Both go through Deliveries, both end with the way to stop that kind of
+  message, and somebody who has closed their direct messages has them switched off rather
+  than being written to every week.
+- The personal calendar: the calendar command creates or rotates a private calendar
+  address through the web platform, and the set of organizations it carries is sent again
+  whenever somebody's follows change.
+- The weekly digest a server posts, on the day and at the hour it chooses, with the option
+  of pinning each one and unpinning the one before it; the day of reminders in the channel
+  bound to them, at the lead time the server chooses; and the living this week message,
+  posted once, pinned, and edited in place both hourly and whenever the outbox says an
+  event of a followed organization has changed. The remove command now unpins it.
+- The setup panels gained a fifth step for when the timed posts happen, with the defaults
+  the design names: Sunday at six in the evening, an hour of notice, and no pinning.
+- The personal calendar endpoints on the web platform client, in all three of the
+  interface, the HTTP implementation and the fake, with hand written fixtures.
+- The health endpoint reports when the scheduler last made a pass, for the same reason it
+  reports the outbox consumer's cursor.

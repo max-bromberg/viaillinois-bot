@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import {
-  ViaError, parseEvent, parseLinkSession, parseLinkedAccount, parseOutboxEntry, parseRsos,
+  ViaError, parseEvent, parseLinkSession, parseLinkedAccount, parseOutboxEntry,
+  parsePersonalCalendar, parseRsos,
   type ViaClient, type EventPage, type EventQuery, type InterestAnswer, type InterestSignal,
   type LinkSession, type LinkedAccount, type OutboxEntry, type OutboxPage, type OutboxQuery,
-  type Rso, type RsoWithEvents, type ViaEvent,
+  type PersonalCalendar, type Rso, type RsoWithEvents, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -54,6 +55,8 @@ const RECORDED_RSOS = parseRsos(fixture('rsos.json'));
 const RECORDED_EVENT = parseEvent((fixture('event.json') as { event: unknown }).event);
 /** The recorded calendar file, whose text every calendar answer is built from. */
 const RECORDED_CALENDAR = (fixture('eventCalendar.json') as { body: string }).body;
+/** The recorded personal calendar, whose address shape every answer follows. */
+const CALENDAR_TEMPLATE = parsePersonalCalendar(fixture('calendars.personal.json'));
 
 /**
  * One recorded entry per outbox kind, as the web platform writes them. A test
@@ -84,6 +87,12 @@ export interface RecordedInterest {
   discordUserId?: string;
 }
 
+/** One person's calendar, as the fake holds it. */
+export interface SeededPersonalCalendar extends PersonalCalendar {
+  /** The organizations the calendar carries, or null for every one of them. */
+  rsoIds: number[] | null;
+}
+
 export interface FakeViaClient extends ViaClient {
   /** Every session the fake was asked to open, in order. */
   readonly sessions: OpenedSession[];
@@ -111,6 +120,8 @@ export interface FakeViaClient extends ViaClient {
   seedLink(discordUserId: string, overrides?: Partial<LinkedAccount>, timing?: SeedTiming): LinkedAccount;
   /** Remove a link without going through the unlink call. */
   removeLink(discordUserId: string): void;
+  /** The calendar the fake holds for a person, or null when they have none. */
+  personalCalendarOf(discordUserId: string): SeededPersonalCalendar | null;
   /** Whether the web platform answers its health endpoint. */
   setHealthy(healthy: boolean): void;
   /** Make the next call, whichever it is, throw the given error. */
@@ -135,9 +146,11 @@ export function createFakeViaClient(): FakeViaClient {
   const interests: RecordedInterest[] = [];
   /** Who has marked interest in each event, so that one person counts once. */
   const interested = new Map<number, Set<string>>();
+  const calendars = new Map<string, SeededPersonalCalendar>();
   let healthy = true;
   let nextFailure: Error | null = null;
   let sessionCounter = 0;
+  let calendarCounter = 0;
 
   /** One instruction, one failure, so a test can assert on the recovery too. */
   function throwIfInstructed(): void {
@@ -254,8 +267,15 @@ export function createFakeViaClient(): FakeViaClient {
       nextFailure = error;
     },
 
+    personalCalendarOf(discordUserId) {
+      const held = calendars.get(discordUserId);
+      return held ? { ...held, rsoIds: held.rsoIds === null ? null : [...held.rsoIds] } : null;
+    },
+
     reset() {
       links.clear();
+      calendars.clear();
+      calendarCounter = 0;
       sessions.length = 0;
       calls.length = 0;
       outbox.length = 0;
@@ -425,6 +445,39 @@ export function createFakeViaClient(): FakeViaClient {
         event.interestCount -= 1;
       }
       return { ok: true, interestCount: event.interestCount };
+    },
+
+    /**
+     * The calendar belongs to a linked person, which is what the acting header
+     * names, and asking for it again rotates the token. The token itself is a
+     * counter here rather than anything random, so that a test can read the
+     * address it was given and see that a second call changed it.
+     */
+    async createPersonalCalendar(rsoIds, actingDiscordUserId) {
+      throwIfInstructed();
+      calls.push('createPersonalCalendar');
+      if (!links.has(actingDiscordUserId)) {
+        throw new ViaError('This Discord account is not linked to a VIA account.', 403, 'not_linked');
+      }
+      calendarCounter += 1;
+      const token = String(calendarCounter).padStart(32, '0');
+      const calendar: SeededPersonalCalendar = {
+        address: CALENDAR_TEMPLATE.address.replace(/[^/]+\.ics$/, `${token}.ics`),
+        rotatedAt: CALENDAR_TEMPLATE.rotatedAt,
+        rsoIds: rsoIds === null ? null : [...rsoIds],
+      };
+      calendars.set(actingDiscordUserId, calendar);
+      return { address: calendar.address, rotatedAt: calendar.rotatedAt };
+    },
+
+    async updatePersonalCalendarRsos(rsoIds, actingDiscordUserId) {
+      throwIfInstructed();
+      calls.push('updatePersonalCalendarRsos');
+      const held = calendars.get(actingDiscordUserId);
+      if (!held) {
+        throw new ViaError('This VIA account has no personal calendar.', 404, 'not_found');
+      }
+      calendars.set(actingDiscordUserId, { ...held, rsoIds: rsoIds === null ? null : [...rsoIds] });
     },
 
     async health() {

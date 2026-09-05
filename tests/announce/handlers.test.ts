@@ -99,6 +99,22 @@ async function server(guilds: GuildStore, options: {
   await guilds.setFeatureEnabled(guildId, 'mirror.scheduled', options.mirror === true);
 }
 
+/** The living this week message, as a list of the servers it was asked about. */
+function recordingThisWeek() {
+  const refreshed: string[] = [];
+  return {
+    refreshed,
+    message: {
+      async refresh(installation: { guildId: string }) {
+        refreshed.push(installation.guildId);
+        return true;
+      },
+      async refreshAll() { return { posted: 0, updated: 0, failed: 0 }; },
+      async refreshFollowing() { return { posted: 0, updated: 0, failed: 0 }; },
+    },
+  };
+}
+
 async function built(options: { withMirror?: boolean } = {}) {
   const guilds = memoryGuildStore();
   const mirrors = memoryEventMirrors();
@@ -112,6 +128,8 @@ async function built(options: { withMirror?: boolean } = {}) {
     guilds, mirrors, deliveries, actions, via, disable, now: () => NOW,
   });
 
+  const thisWeek = recordingThisWeek();
+
   const handlers = createAnnouncementHandlers({
     guilds,
     mirrors,
@@ -120,10 +138,11 @@ async function built(options: { withMirror?: boolean } = {}) {
     via,
     disable,
     websiteUrl: 'https://viaillinois.com',
+    thisWeek: thisWeek.message,
     ...(options.withMirror === false ? {} : { mirror }),
   });
 
-  return { guilds, mirrors, deliveries, actions, directMessages, via, mirror, handlers };
+  return { guilds, mirrors, deliveries, actions, directMessages, via, mirror, handlers, thisWeek };
 }
 
 /** An outbox entry of a kind, carrying the event or series a test names. */
@@ -522,5 +541,30 @@ describe('keeping the Events tab in step with the outbox', () => {
       'series.deleted',
       'series.updated',
     ]);
+  });
+});
+
+/**
+ * The living this week message is brought up to date by the outbox handlers as
+ * well as by the hourly job, so that a meeting moved at nine in the morning is
+ * right in the channel at one minute past rather than at ten.
+ */
+describe('keeping the this week message current', () => {
+  it('brings it up to date in every server that follows the organization', async () => {
+    const { handlers, guilds, thisWeek } = await built();
+    await server(guilds, { guildId: RSO_SERVER, binding: 'rso', rsoId: 1 });
+    await server(guilds, { guildId: COMMUNITY_ALL, binding: 'all' });
+
+    await handlers['event.updated']!(entryOf('event.updated', { event: payloadEvent(), changed: ['title'] }));
+    expect(thisWeek.refreshed.sort()).toEqual([RSO_SERVER, COMMUNITY_ALL].sort());
+  });
+
+  it('brings it up to date when an event is created and when one is removed', async () => {
+    const { handlers, guilds, thisWeek } = await built();
+    await server(guilds, { guildId: RSO_SERVER, binding: 'rso', rsoId: 1 });
+
+    await handlers['event.created']!(entryOf('event.created', { event: payloadEvent() }));
+    await handlers['event.deleted']!(entryOf('event.deleted', { event: payloadEvent() }, { outboxId: 2 }));
+    expect(thisWeek.refreshed).toEqual([RSO_SERVER, RSO_SERVER]);
   });
 });

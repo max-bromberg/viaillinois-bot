@@ -35,6 +35,14 @@ function recordingStore() {
     async listFollowedRsos() { return []; },
     async listGuildsFollowing() { return []; },
     async listInstallations() { return []; },
+    async setDigestSchedule() {},
+    async setReminderLeadMinutes() {},
+    async setDigestPinned() {},
+    async listInstallationsForDigest() { return []; },
+    async getGuildMessage() { return null; },
+    async setGuildMessage() {},
+    async listGuildMessages() { return []; },
+    async removeGuildMessage() {},
     async removeGuild(guildId) {
       removed.push(guildId);
       return { features: 0, channels: 0, followedRsos: 0, installation: true } as RemovedRows;

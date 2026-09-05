@@ -3,17 +3,26 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findViolations } from '../../scripts/check-language.js';
-import { features, featureById, CHANNEL_PURPOSES } from '../../src/features/registry.ts';
+import {
+  features, featureById, CHANNEL_PURPOSES, COMMAND_GROUP_DESCRIPTIONS,
+} from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the identity, reading, setup and proactive features the first two increments have', () => {
+  it('registers the identity, reading, setup, feed and proactive features the first three increments have', () => {
     expect(features.map(f => f.id).sort()).toEqual([
       'announce.changes',
+      'announce.dayof',
+      'announce.digest',
       'announce.new',
       'events.detail',
       'events.list',
+      'feed.calendar',
+      'feed.digest',
+      'feed.follow',
+      'feed.reminders',
       'identity.link',
       'identity.unlink',
+      'living.thisweek',
       'mirror.scheduled',
       'rsos.detail',
       'setup.configure',
@@ -198,6 +207,60 @@ describe('the feature registry', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('puts the personal feed behind a link, and lets it be used everywhere', () => {
+    for (const id of ['feed.follow', 'feed.digest', 'feed.reminders', 'feed.calendar']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('command');
+      expect(feature.tier).toBe('linked');
+      expect(feature.defaultEnabled).toBe(true);
+      expect(feature.requiredPermissions).toEqual([]);
+      expect([...feature.contexts].sort()).toEqual(['botDm', 'guild', 'privateChannel']);
+      expect(feature.command).toBeDefined();
+    }
+  });
+
+  it('reaches following, unfollowing and the list of what is followed by three names', () => {
+    const command = featureById('feed.follow').command!;
+    expect(command.name).toBe('follow');
+    expect(command.alternateNames!.map(alternate => alternate.name)).toEqual(['unfollow', 'following']);
+    expect(command.options!.map(option => option.name)).toEqual(['rso']);
+    expect(command.options![0]!.autocomplete).toBe(true);
+  });
+
+  it('gathers the two settings commands under the feed group', () => {
+    expect(featureById('feed.digest').command).toMatchObject({ group: 'feed', name: 'settings' });
+    expect(featureById('feed.reminders').command).toMatchObject({ group: 'feed', name: 'reminders' });
+  });
+
+  it('describes every command group it names', () => {
+    for (const feature of features) {
+      const group = feature.command?.group;
+      if (!group) continue;
+      expect(COMMAND_GROUP_DESCRIPTIONS[group]!.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('posts the weekly digest, the day of reminders and the living message in the channels bound to them', () => {
+    const purposes: Record<string, string> = {
+      'announce.digest': 'digest',
+      'announce.dayof': 'reminders',
+      'living.thisweek': 'thisweek',
+    };
+    for (const [id, purpose] of Object.entries(purposes)) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('proactive');
+      expect([...feature.channelPurposes]).toEqual([purpose]);
+      expect([...feature.contexts]).toEqual(['guild']);
+      expect(feature.command).toBeUndefined();
+      expect(feature.requiredPermissions).toContain('ViewChannel');
+      expect(feature.requiredPermissions).toContain('SendMessages');
+    }
+  });
+
+  it('needs the permission to pin for the message it keeps pinned', () => {
+    expect(featureById('living.thisweek').requiredPermissions).toContain('ManageMessages');
   });
 
   it('lists the five channel purposes the design names', () => {

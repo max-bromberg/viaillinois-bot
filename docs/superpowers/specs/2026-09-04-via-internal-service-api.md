@@ -300,7 +300,7 @@ default `internal` network and `via_internal`, with `TZ` set to campus time, mem
 processor ceilings, `depends_on` the database being healthy and the web platform being
 started, one host port for its health endpoint, and the environment it needs:
 `DB_HOST`, `DB_PORT`, `BOT_DB_USER`, `BOT_DB_PASSWORD`, `BOT_DB_NAME`, `VIA_INTERNAL_URL`
-which is `http://via:3001`, `BOT_SERVICE_TOKEN`, `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID`,
+which is `http://via-platform:3001`, the alias the web platform carries on the stack's private network, `BOT_SERVICE_TOKEN`, `DISCORD_TOKEN`, `DISCORD_APPLICATION_ID`,
 and `DISCORD_PUBLIC_KEY`. The web platform's service gains `BOT_SERVICE_TOKEN`,
 `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_LINK_KEY` and
 `DISCORD_INTEREST_SALT`. The database service creates the `via_bot` database and its

@@ -350,3 +350,53 @@ describe('interest through the fake', () => {
     expect((failure as ViaError).code).toBe('not_found');
   });
 });
+
+/**
+ * The personal calendar, as the fake serves it. The rules modelled here are
+ * the web platform's: the calendar belongs to a linked person, asking for it
+ * again rotates the token, and the set of organizations can be updated on its
+ * own without rotating anything.
+ */
+describe('the personal calendar', () => {
+  const ADA = '204255221017214977';
+
+  it('refuses a calendar for somebody who has no VIA account', async () => {
+    const via = createFakeViaClient();
+    const failure = await via.createPersonalCalendar([3], ADA).then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('not_linked');
+  });
+
+  it('answers with an address carrying a token, and the organizations it was given', async () => {
+    const via = createFakeViaClient();
+    via.seedLink(ADA);
+    const calendar = await via.createPersonalCalendar([3, 7], ADA);
+    expect(calendar.address).toContain('/calendar/personal/');
+    expect(calendar.rotatedAt.length).toBeGreaterThan(0);
+    expect(via.personalCalendarOf(ADA)!.rsoIds).toEqual([3, 7]);
+  });
+
+  it('rotates the token when the calendar is asked for again', async () => {
+    const via = createFakeViaClient();
+    via.seedLink(ADA);
+    const first = await via.createPersonalCalendar([3], ADA);
+    const second = await via.createPersonalCalendar([3], ADA);
+    expect(second.address).not.toBe(first.address);
+  });
+
+  it('updates the organizations without rotating the token', async () => {
+    const via = createFakeViaClient();
+    via.seedLink(ADA);
+    const first = await via.createPersonalCalendar([3], ADA);
+    await via.updatePersonalCalendarRsos(null, ADA);
+
+    expect(via.personalCalendarOf(ADA)!.address).toBe(first.address);
+    expect(via.personalCalendarOf(ADA)!.rsoIds).toBe(null);
+  });
+
+  it('refuses to update a calendar nobody has asked for yet', async () => {
+    const via = createFakeViaClient();
+    via.seedLink(ADA);
+    const failure = await via.updatePersonalCalendarRsos([3], ADA).then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('not_found');
+  });
+});

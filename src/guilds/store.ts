@@ -1,16 +1,20 @@
 import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
-import { guildChannels, guildFeatures, guildFollowedRsos, guildInstallations } from '../db/schema.ts';
+import {
+  guildChannels, guildFeatures, guildFollowedRsos, guildInstallations, guildMessages,
+} from '../db/schema.ts';
 import { featureById, type ChannelPurpose } from '../features/registry.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
 
 /**
  * The server records.
  *
- * Four tables answer one question each. Guild_Installations says what a
- * server is and what it speaks for, Guild_Followed_Rsos spells out the set
- * when the binding is a set, Guild_Features holds the toggles a server moved
- * away from the registry default, and Guild_Channels holds the channel a
- * server bound to each purpose. Everything the setup panels write and
+ * Five tables answer one question each. Guild_Installations says what a
+ * server is, what it speaks for and when its timed posts happen,
+ * Guild_Followed_Rsos spells out the set when the binding is a set,
+ * Guild_Features holds the toggles a server moved away from the registry
+ * default, Guild_Channels holds the channel a server bound to each purpose,
+ * and Guild_Messages holds the two messages the bot has to be able to find
+ * again, which are the living this week message and the last digest. Everything the setup panels write and
  * everything the proactive jobs read goes through this module, so there is
  * one place that knows the shape of a server's configuration.
  *
@@ -40,8 +44,36 @@ export interface GuildInstallation {
   installedBy: string;
   installedAt: string;
   mirrorWindowDays: number;
+  /** The day of the week the weekly digest is posted on, zero for Sunday. */
+  digestDay: number;
+  /** The hour on the campus clock the weekly digest is posted at. */
+  digestHour: number;
+  /** How far ahead the day of reminders are posted. */
+  reminderLeadMinutes: number;
+  /** Whether each digest is pinned and the one before it unpinned. */
+  digestPinned: boolean;
   /** Whether setup has answered both of the questions that define a server. */
   isSetUp: boolean;
+}
+
+/**
+ * The messages a server has one of. The living this week message is edited in
+ * place and kept pinned, and the last digest is remembered so that pinning the
+ * next one can unpin it.
+ */
+export type GuildMessagePurpose = 'thisweek' | 'digest';
+
+export interface GuildMessage {
+  guildId: string;
+  purpose: GuildMessagePurpose;
+  channelId: string;
+  messageId: string;
+}
+
+/** Where a message the bot posted ended up. */
+export interface PostedMessageRef {
+  channelId: string;
+  messageId: string;
 }
 
 /** What a binding is being set to, with the organization when it names one. */
@@ -83,6 +115,21 @@ export interface GuildStore {
   listGuildsFollowing(rsoId: number): Promise<GuildInstallation[]>;
   /** Every server that has been set up, for the jobs that run over all of them. */
   listInstallations(): Promise<GuildInstallation[]>;
+  /** When the weekly digest is posted, on the campus clock. */
+  setDigestSchedule(guildId: string, day: number, hour: number): Promise<void>;
+  /** How far ahead the day of reminders are posted. */
+  setReminderLeadMinutes(guildId: string, minutes: number): Promise<void>;
+  /** Whether each digest is pinned and the one before it unpinned. */
+  setDigestPinned(guildId: string, pinned: boolean): Promise<void>;
+  /** Every server that has been set up and whose digest falls in this campus day and hour. */
+  listInstallationsForDigest(dayOfWeek: number, hour: number): Promise<GuildInstallation[]>;
+  /** Where a message of one purpose was posted, or null when there is none. */
+  getGuildMessage(guildId: string, purpose: GuildMessagePurpose): Promise<GuildMessage | null>;
+  /** Write down where a message of one purpose is now, replacing what was there. */
+  setGuildMessage(guildId: string, purpose: GuildMessagePurpose, posted: PostedMessageRef): Promise<void>;
+  /** Every message the bot holds for a server, which is what removal unpins. */
+  listGuildMessages(guildId: string): Promise<GuildMessage[]>;
+  removeGuildMessage(guildId: string, purpose: GuildMessagePurpose): Promise<void>;
   /** Delete every row the bot holds for a server, and say what it deleted. */
   removeGuild(guildId: string): Promise<RemovedRows>;
 }
@@ -96,6 +143,10 @@ function present(row: typeof guildInstallations.$inferSelect): GuildInstallation
     installedBy: row.installedBy,
     installedAt: row.installedAt,
     mirrorWindowDays: row.mirrorWindowDays,
+    digestDay: row.digestDay,
+    digestHour: row.digestHour,
+    reminderLeadMinutes: row.reminderLeadMinutes,
+    digestPinned: Boolean(row.digestPinned),
     isSetUp: row.kind !== null && row.binding !== null,
   };
 }
@@ -236,6 +287,66 @@ export function createGuildStore(db: BotDatabase): GuildStore {
       return rows.map(present);
     },
 
+    async setDigestSchedule(guildId, day, hour) {
+      await db.update(guildInstallations)
+        .set({ digestDay: day, digestHour: hour })
+        .where(eq(guildInstallations.guildId, guildId));
+    },
+
+    async setReminderLeadMinutes(guildId, minutes) {
+      await db.update(guildInstallations)
+        .set({ reminderLeadMinutes: minutes })
+        .where(eq(guildInstallations.guildId, guildId));
+    },
+
+    async setDigestPinned(guildId, pinned) {
+      await db.update(guildInstallations)
+        .set({ digestPinned: pinned })
+        .where(eq(guildInstallations.guildId, guildId));
+    },
+
+    /**
+     * The servers whose digest hour this is. A server that has not been set up
+     * is not one of them, whatever its columns say, because nothing is posted
+     * in a server nobody has answered for.
+     */
+    async listInstallationsForDigest(dayOfWeek, hour) {
+      const rows = await db.select().from(guildInstallations).where(and(
+        isNotNull(guildInstallations.kind),
+        isNotNull(guildInstallations.binding),
+        eq(guildInstallations.digestDay, dayOfWeek),
+        eq(guildInstallations.digestHour, hour),
+      ));
+      return rows.map(present);
+    },
+
+    async getGuildMessage(guildId, purpose) {
+      const [row] = await db.select().from(guildMessages).where(and(
+        eq(guildMessages.guildId, guildId),
+        eq(guildMessages.purpose, purpose),
+      ));
+      return row ? { ...row, purpose: row.purpose as GuildMessagePurpose } : null;
+    },
+
+    async setGuildMessage(guildId, purpose, posted) {
+      await db.insert(guildMessages)
+        .values({ guildId, purpose, channelId: posted.channelId, messageId: posted.messageId })
+        .onDuplicateKeyUpdate({ set: { channelId: posted.channelId, messageId: posted.messageId } });
+    },
+
+    async listGuildMessages(guildId) {
+      const rows = await db.select().from(guildMessages)
+        .where(eq(guildMessages.guildId, guildId));
+      return rows.map(row => ({ ...row, purpose: row.purpose as GuildMessagePurpose }));
+    },
+
+    async removeGuildMessage(guildId, purpose) {
+      await db.delete(guildMessages).where(and(
+        eq(guildMessages.guildId, guildId),
+        eq(guildMessages.purpose, purpose),
+      ));
+    },
+
     /**
      * Removal counts before it deletes, because the manager is told what went
      * and a count taken afterwards would be zero whatever was there. The three
@@ -253,6 +364,7 @@ export function createGuildStore(db: BotDatabase): GuildStore {
       await db.delete(guildFeatures).where(eq(guildFeatures.guildId, guildId));
       await db.delete(guildChannels).where(eq(guildChannels.guildId, guildId));
       await db.delete(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId));
+      await db.delete(guildMessages).where(eq(guildMessages.guildId, guildId));
       await db.delete(guildInstallations).where(eq(guildInstallations.guildId, guildId));
 
       return {

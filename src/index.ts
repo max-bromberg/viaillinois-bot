@@ -10,19 +10,29 @@ import { createGateway } from './discord/client.ts';
 import { createGuildStore } from './guilds/store.ts';
 import { createGuildLifecycle } from './guilds/lifecycle.ts';
 import { createFeatureDisabler } from './guilds/disable.ts';
-import { createDirectMessageSender } from './discord/directMessages.ts';
+import {
+  createDirectMessageDelivery, createDirectMessageSender,
+} from './discord/directMessages.ts';
 import { createDiscordActions, toScheduledEventInterest } from './discord/adapter.ts';
 import { buildCommands, putCommands } from './discord/registerCommands.ts';
 import { createRateWindows } from './ratelimit/windows.ts';
 import { createDispatcher, deleteLocalData } from './commands/index.ts';
 import { createDeliveries } from './delivery/deliveries.ts';
+import { createFeedStore } from './feed/store.ts';
 import { createEventMirrors } from './mirror/eventMirrors.ts';
 import { createScheduledEventMirror } from './mirror/scheduledEvents.ts';
 import { createInterestRecorder } from './mirror/interest.ts';
 import { createAnnouncementHandlers } from './announce/handlers.ts';
+import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
 import { createMirrorWindowJob } from './jobs/mirrorWindow.ts';
+import { createJobRuns } from './jobs/runs.ts';
+import { createJobScheduler } from './jobs/scheduler.ts';
+import { createPersonalDigestJob } from './jobs/personalDigest.ts';
+import { createPersonalReminderJob } from './jobs/personalReminders.ts';
+import { createGuildDigestJob } from './jobs/guildDigest.ts';
+import { createDayOfReminderJob } from './jobs/dayOfReminders.ts';
 
 /**
  * The bot's entry point, which is the one place everything is wired together.
@@ -52,10 +62,12 @@ const via = withHotReadCache(createViaHttpClient({
 }));
 
 const guilds = createGuildStore(db);
+const feed = createFeedStore(db);
 const guildLifecycle = createGuildLifecycle({ guilds });
 const deliveries = createDeliveries(db);
 const mirrors = createEventMirrors(db);
 const cursors = createOutboxCursors(db);
+const jobRuns = createJobRuns(db);
 
 const rateWindows = createRateWindows({ db, limits: config.rateLimits });
 
@@ -84,6 +96,7 @@ const gateway = createGateway({
  */
 const actions = createDiscordActions(gateway.client);
 const sendDirectMessage = createDirectMessageSender(gateway.client);
+const deliverDirectMessage = createDirectMessageDelivery(gateway.client);
 const disable = createFeatureDisabler({ guilds, deliveries, sendDirectMessage });
 
 const scheduledEvents = createScheduledEventMirror({
@@ -98,6 +111,14 @@ const scheduledEvents = createScheduledEventMirror({
 
 const recordInterest = createInterestRecorder({ via, mirrors });
 
+/**
+ * The living this week message, which two things bring up to date: the hourly
+ * job below, so that an event which has happened leaves the list, and the
+ * outbox handlers, so that a meeting moved at nine in the morning is right in
+ * the channel at one minute past.
+ */
+const thisWeek = createThisWeekMessage({ guilds, deliveries, actions, via, disable });
+
 const consumer = createOutboxConsumer({
   via,
   cursors,
@@ -110,6 +131,7 @@ const consumer = createOutboxConsumer({
     disable,
     websiteUrl: config.viaPublicUrl,
     mirror: scheduledEvents,
+    thisWeek,
   }),
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.
@@ -118,9 +140,41 @@ const consumer = createOutboxConsumer({
 
 const mirrorWindow = createMirrorWindowJob({ guilds, mirror: scheduledEvents });
 
+/**
+ * The timed posts, on one clock.
+ *
+ * The three hourly jobs are the ones whose work belongs to a particular hour,
+ * so a bot that was down over a digest hour sends that digest when it returns.
+ * The two of the tick cadence are the ones whose work is due at a moment
+ * somebody chose, and everything they owe is already written down in Reminders
+ * and in the events themselves.
+ */
+const personalDigest = createPersonalDigestJob({
+  feed, deliveries, via, deliver: deliverDirectMessage,
+});
+const personalReminders = createPersonalReminderJob({
+  feed, deliveries, via, deliver: deliverDirectMessage,
+});
+const guildDigest = createGuildDigestJob({ guilds, deliveries, actions, via, disable });
+const dayOfReminders = createDayOfReminderJob({
+  guilds, deliveries, actions, via, disable, websiteUrl: config.viaPublicUrl,
+});
+
+const scheduler = createJobScheduler({
+  runs: jobRuns,
+  jobs: [
+    { name: 'personal.digest', async run(hour) { await personalDigest.run(hour); } },
+    { name: 'guild.digest', async run(hour) { await guildDigest.run(hour); } },
+    { name: 'living.thisweek', async run(hour) { await thisWeek.refreshAll(hour.at); } },
+    { name: 'personal.reminders', cadence: 'tick', async run(hour) { await personalReminders.run(hour); } },
+    { name: 'guild.dayof', cadence: 'tick', async run(hour) { await dayOfReminders.run(hour); } },
+  ],
+});
+
 const dispatch = createDispatcher({
   via,
   guilds,
+  feed,
   websiteUrl: config.viaPublicUrl,
   rateWindows,
   deleteLocalData: discordUserId => deleteLocalData(db, discordUserId),
@@ -143,6 +197,7 @@ const health = await startHealthServer({
   },
   viaPlatform: () => via.health(),
   outboxConsumer: () => consumer.state(),
+  scheduler: () => scheduler.state(),
 }, config.healthPort);
 
 console.log(`via-bot ${version}: health listening on port ${health.port}`);
@@ -166,6 +221,8 @@ void consumer.start();
 console.log('via-bot: the outbox consumer is running');
 void mirrorWindow.start();
 console.log('via-bot: the mirroring window will be rolled daily');
+void scheduler.start();
+console.log('via-bot: the digests, the reminders and the this week message are on the clock');
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
@@ -173,6 +230,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     // half way through a post when the pool closes under it.
     await consumer.stop();
     await mirrorWindow.stop();
+    await scheduler.stop();
     await gateway.destroy();
     await health.close();
     await pool.end();

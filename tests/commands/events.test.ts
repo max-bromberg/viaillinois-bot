@@ -274,19 +274,6 @@ describe('the buttons on the event card', () => {
   });
 
   /**
-   * Reminders and interest are the third increment's work. A button that
-   * silently did nothing would be worse than one that says when it will work,
-   * so the honest sentence is what it answers with until then.
-   */
-  it('tells a linked person plainly that reminders are not built yet', async () => {
-    const { context, via } = testContext();
-    via.seedLink(ROSA);
-    const reply = await eventComponent.run(press('event:remind:10'), context);
-    expect(reply.content).toContain('not ready yet');
-    expect(reply.content).not.toContain('Link my account');
-  });
-
-  /**
    * Interest is what replaces the RSVPs the web platform removed, so the
    * button records it on VIA rather than in the bot, and the answer says how
    * many people are interested now, which is the one thing the person who
@@ -381,15 +368,5 @@ describe('the organization command', () => {
       context,
     );
     expect(labelsOf(reply)).toContain('Link my account');
-  });
-
-  it('tells a linked person plainly that following is not built yet', async () => {
-    const { context, via } = testContext();
-    via.seedLink(ROSA);
-    const reply = await rsoComponent.run(
-      interaction({ kind: 'button', commandName: null, customId: 'rso:follow:1' }),
-      context,
-    );
-    expect(reply.content).toContain('not ready yet');
   });
 });

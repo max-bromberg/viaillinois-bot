@@ -7,12 +7,14 @@ import {
   renderRemovedAnnouncement, renderSeriesAnnouncement,
 } from '../render/announcement.ts';
 import { channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { channelFor, noChannelReason } from '../guilds/channels.ts';
 import { isMissingAccess, isMissingMessage, type DiscordActions, type Reply } from '../discord/adapter.ts';
 import type { OutboxHandlers } from '../outbox/consumer.ts';
 import type { EventMirror, EventMirrors } from '../mirror/eventMirrors.ts';
 import type { ScheduledEventMirror } from '../mirror/scheduledEvents.ts';
 import type { FeatureDisabler } from '../guilds/disable.ts';
 import type { GuildInstallation, GuildStore } from '../guilds/store.ts';
+import type { ThisWeekMessage } from './thisWeek.ts';
 
 /**
  * What the bot posts when the outbox says something happened.
@@ -59,7 +61,7 @@ export function noticePurpose(kind: string): string {
   return `${kind}:notice`;
 }
 
-export const NO_CHANNEL_REASON = 'no channel is bound to announcements';
+export const NO_CHANNEL_REASON = noChannelReason('announcements');
 
 /**
  * Which feature an entry belongs to. A server chooses to hear about new
@@ -81,24 +83,30 @@ export interface AnnouncementHandlerOptions {
   websiteUrl: string;
   /** The Events tab, kept in step by the same handlers. Left out where a run has none. */
   mirror?: ScheduledEventMirror;
+  /**
+   * The living this week message, brought up to date by the same handlers, so
+   * that a meeting moved at nine in the morning is right in the channel at one
+   * minute past rather than at ten. Left out where a run has none.
+   */
+  thisWeek?: ThisWeekMessage;
+  /** Injected so that tests write a fixed campus wall clock. */
+  now?: () => Date;
 }
 
 export function createAnnouncementHandlers(options: AnnouncementHandlerOptions): OutboxHandlers {
-  const { guilds, mirrors, deliveries, actions, via, disable, websiteUrl, mirror } = options;
+  const {
+    guilds, mirrors, deliveries, actions, via, disable, websiteUrl, mirror, thisWeek,
+    now = () => new Date(),
+  } = options;
   const cardOptions = { websiteUrl };
 
   /**
    * The channel a server announces in, or nothing when it has none. A server
    * with the feature on and no channel bound has broken it, so the feature is
-   * switched off and the manager is told once.
+   * switched off and the manager is told once, which channelFor does.
    */
   async function announcementChannel(guildId: string, featureId: string): Promise<string | null> {
-    if (!(await guilds.isFeatureEnabled(guildId, featureId))) return null;
-    const channels = await guilds.listChannels(guildId);
-    if (channels.announcements) return channels.announcements;
-
-    await disable.disable(guildId, featureId, NO_CHANNEL_REASON);
-    return null;
+    return channelFor({ guilds, disable }, guildId, featureId, 'announcements');
   }
 
   /** Every server that hears about this entry's organization. */
@@ -247,6 +255,27 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
     }
   }
 
+  /**
+   * Bring the living this week message up to date in every server that hears
+   * about this organization. A failure here is logged and nothing more: the
+   * announcement has been posted, and the hourly job will put the message
+   * right on its next pass.
+   */
+  async function refreshThisWeek(entry: OutboxEntry, event: ViaEvent | null): Promise<void> {
+    if (!thisWeek) return;
+    const at = now();
+    for (const installation of await serversFor(entry, event)) {
+      try {
+        await thisWeek.refresh(installation, at);
+      } catch (err) {
+        console.error(
+          `bringing the this week message in server ${installation.guildId} up to date failed:`,
+          (err as Error).message,
+        );
+      }
+    }
+  }
+
   /** Roll the window of every following server, which is what a series change asks for. */
   async function mirrorSeries(entry: OutboxEntry): Promise<void> {
     if (!mirror) return;
@@ -282,6 +311,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         await announceNew(entry, event, renderEventAnnouncement(event, cardOptions));
       }
       await mirrorEvent(entry, event);
+      await refreshThisWeek(entry, event);
     },
 
     async 'series.created'(entry) {
@@ -300,6 +330,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         await announceNew(entry, first, renderSeriesAnnouncement(first, change.series, cardOptions));
       }
       await mirrorSeries(entry);
+      await refreshThisWeek(entry, first);
     },
 
     async 'event.updated'(entry) {
@@ -315,6 +346,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         event,
       );
       await mirrorEvent(entry, event);
+      await refreshThisWeek(entry, event);
     },
 
     async 'event.cancelled'(entry) {
@@ -329,6 +361,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         event,
       );
       await mirrorEvent(entry, event);
+      await refreshThisWeek(entry, event);
     },
 
     async 'event.deleted'(entry) {
@@ -343,6 +376,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         event,
       );
       await unmirrorEvents(entry, [event.eventId], event);
+      await refreshThisWeek(entry, event);
     },
 
     async 'series.updated'(entry) {
@@ -361,6 +395,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         );
       }
       await mirrorSeries(entry);
+      await refreshThisWeek(entry, first);
     },
 
     async 'series.deleted'(entry) {
@@ -370,6 +405,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       const eventIds = [...new Set([...change.eventIds, ...change.affectedEventIds])];
       await announceChange(entry, eventIds, renderRemovedAnnouncement(null), null, null);
       await unmirrorEvents(entry, eventIds, null);
+      await refreshThisWeek(entry, null);
     },
   };
 }

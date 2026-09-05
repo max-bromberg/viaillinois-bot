@@ -4,7 +4,7 @@ import {
   InteractionContextType, Routes,
 } from 'discord.js';
 import { buildCommands, putCommands, VIA_GROUP } from '../../src/discord/registerCommands.ts';
-import { features } from '../../src/features/registry.ts';
+import { features, COMMAND_GROUP_DESCRIPTIONS } from '../../src/features/registry.ts';
 import type { Feature } from '../../src/features/registry.ts';
 
 const EVERYWHERE = ['guild', 'botDm', 'privateChannel'] as const;
@@ -27,7 +27,10 @@ function feature(overrides: Partial<Feature>): Feature {
 describe('building the application commands from the registry', () => {
   it('puts every student command at the top level and everything else under the via group', () => {
     const commands = buildCommands(features);
-    expect(commands.map(c => c.name).sort()).toEqual(['event', 'events', 'link', 'rso', 'unlink', VIA_GROUP]);
+    expect(commands.map(c => c.name).sort()).toEqual([
+      'calendar', 'event', 'events', 'feed', 'follow', 'following', 'link', 'rso', 'unfollow',
+      'unlink', VIA_GROUP,
+    ]);
     for (const command of commands) {
       expect(command.type).toBe(ApplicationCommandType.ChatInput);
       expect(command.description.length).toBeGreaterThan(0);
@@ -117,6 +120,51 @@ describe('building the application commands from the registry', () => {
       expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
     }
     expect(group.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+  });
+
+  it('gathers the commands of a declared group under one command of that name', () => {
+    const commands = buildCommands([
+      feature({
+        id: 'feed.digest',
+        tier: 'linked',
+        command: { group: 'feed', name: 'settings', description: 'Change what VIA sends you and when.' },
+      }),
+      feature({
+        id: 'feed.reminders',
+        tier: 'linked',
+        command: { group: 'feed', name: 'reminders', description: 'See the events you asked to be reminded of.' },
+      }),
+      feature({ id: 'events.list', command: { name: 'events', description: 'See what is coming up.' } }),
+    ]);
+
+    expect(commands.map(c => c.name).sort()).toEqual(['events', 'feed']);
+    const group = commands.find(c => c.name === 'feed')!;
+    expect(group.description).toBe(COMMAND_GROUP_DESCRIPTIONS.feed);
+    expect(group.options!.map(o => o.name)).toEqual(['settings', 'reminders']);
+    for (const option of group.options!) {
+      expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
+    }
+  });
+
+  it('opens a declared group of student commands to both installation contexts', () => {
+    const commands = buildCommands([feature({
+      id: 'feed.digest',
+      tier: 'linked',
+      contexts: EVERYWHERE,
+      command: { group: 'feed', name: 'settings', description: 'Change what VIA sends you and when.' },
+    })]);
+    expect(commands[0]!.integration_types).toEqual([
+      ApplicationIntegrationType.GuildInstall,
+      ApplicationIntegrationType.UserInstall,
+    ]);
+  });
+
+  it('refuses a group it has no description for, rather than sending Discord an empty one', () => {
+    expect(() => buildCommands([feature({
+      id: 'feed.digest',
+      tier: 'linked',
+      command: { group: 'nonesuch', name: 'settings', description: 'Change what VIA sends you and when.' },
+    })])).toThrow('There is no description for the command group nonesuch.');
   });
 
   it('leaves the via group out entirely while nothing sits under it', () => {
@@ -225,6 +273,6 @@ describe('putting the commands to Discord', () => {
       applicationId: '123456789012345678',
       commands: buildCommands(features),
     });
-    expect(count).toBe(6);
+    expect(count).toBe(11);
   });
 });

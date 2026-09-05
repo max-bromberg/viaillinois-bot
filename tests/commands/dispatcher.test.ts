@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { InteractionContextType, InteractionType, MessageFlags } from 'discord.js';
-import { createDispatcher, UNKNOWN_COMMAND_MESSAGE } from '../../src/commands/index.ts';
+import {
+  ApplicationCommandOptionType, InteractionContextType, InteractionType, MessageFlags,
+} from 'discord.js';
+import { createDispatcher, handlers, UNKNOWN_COMMAND_MESSAGE } from '../../src/commands/index.ts';
+import { buildCommands } from '../../src/discord/registerCommands.ts';
 import { FAILURE_MESSAGE } from '../../src/discord/adapter.ts';
 import type { RateDecision, RateTier } from '../../src/ratelimit/windows.ts';
 import { testContext } from './support.ts';
@@ -163,6 +166,26 @@ describe('the command dispatcher', () => {
     await dispatch(raw);
     await Promise.all(scheduled);
     expect(order).toEqual(['scheduled', 'answered']);
+  });
+});
+
+/**
+ * The commands Discord is given and the commands the dispatcher answers are
+ * two lists built from the same registry, and a command in one and not the
+ * other is a command that answers with the sentence about a command the bot
+ * does not have. The subcommand names are joined with a space, which is what
+ * the adapter reports and therefore what the dispatcher keys on.
+ */
+describe('the commands Discord is given and the commands the bot answers', () => {
+  it('has one handler for each, and no handler for anything else', () => {
+    const named: string[] = [];
+    for (const command of buildCommands()) {
+      const subcommands = (command.options ?? [])
+        .filter(option => option.type === ApplicationCommandOptionType.Subcommand);
+      if (subcommands.length === 0) named.push(command.name);
+      else for (const subcommand of subcommands) named.push(`${command.name} ${subcommand.name}`);
+    }
+    expect([...handlers].map(handler => handler.name).sort()).toEqual(named.sort());
   });
 });
 

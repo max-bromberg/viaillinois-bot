@@ -15,6 +15,20 @@
       "when": 1788580115650,
       "tag": "0001_guild_setup_state",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1788584386446,
+      "tag": "0002_job_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1788585467783,
+      "tag": "0003_guild_digest_settings",
+      "breakpoints": true
     }
   ]
 }

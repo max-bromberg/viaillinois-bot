@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, eventQueryParams, interestBody,
+  ViaError, ViaBusyError, calendarRsosBody, eventQueryParams, interestBody,
   parseEvent, parseEventPage, parseInterestAnswer, parseLinkSession, parseLinkedAccount,
-  parseOutboxPage, parseRsoWithEvents, parseRsos,
+  parseOutboxPage, parsePersonalCalendar, parseRsoWithEvents, parseRsos,
   type ViaClient, type ViaErrorCode, type EventPage, type EventQuery, type InterestAnswer,
   type InterestSignal, type LinkSession, type LinkedAccount, type OutboxPage, type OutboxQuery,
-  type Rso, type RsoWithEvents, type ViaEvent,
+  type PersonalCalendar, type Rso, type RsoWithEvents, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -335,6 +335,35 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
         body: interestBody(interest),
         actingDiscordUserId: interest.actingDiscordUserId,
       }));
+    },
+
+    /**
+     * The calendar is the person's own, so it is asked for as them and the
+     * address comes back with a token in it. Asking again rotates the token,
+     * which is how somebody who shared the address by accident takes it back.
+     */
+    async createPersonalCalendar(
+      rsoIds: readonly number[] | null,
+      actingDiscordUserId: string,
+    ): Promise<PersonalCalendar> {
+      return parsePersonalCalendar(await request<unknown>({
+        method: 'POST',
+        path: '/calendars/personal',
+        body: calendarRsosBody(rsoIds),
+        actingDiscordUserId,
+      }));
+    },
+
+    async updatePersonalCalendarRsos(
+      rsoIds: readonly number[] | null,
+      actingDiscordUserId: string,
+    ): Promise<void> {
+      await request<unknown>({
+        method: 'PUT',
+        path: '/calendars/personal/rsos',
+        body: calendarRsosBody(rsoIds),
+        actingDiscordUserId,
+      });
     },
 
     /**

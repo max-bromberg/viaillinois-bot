@@ -1,8 +1,10 @@
 import {
-  features as allFeatures, featureById, CHANNEL_PURPOSES,
+  features as allFeatures, featureById, CHANNEL_PURPOSES, CHANNEL_PURPOSE_LABELS,
   type ChannelPurpose, type DiscordPermission, type Feature, type FeatureCategory,
 } from '../features/registry.ts';
 import { hasPermission, type Interaction, type Reply, type ReplyRow } from '../discord/adapter.ts';
+import { WEEKDAY_NAMES, describeHour } from '../jobs/clock.ts';
+import { LEAD_CHOICES } from './feed.ts';
 import { ViaBusyError, ViaError } from '../via/client.ts';
 import type { GuildBinding, GuildInstallation, GuildKind } from '../guilds/store.ts';
 import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
@@ -11,10 +13,10 @@ import { describeWait, type CommandContext, type CommandHandler, type ComponentH
  * Setup, configuration and removal.
  *
  * Server owner control is a stated goal of the design, so this is a first
- * class part of the bot rather than a settings afterthought. It is four
+ * class part of the bot rather than a settings afterthought. It is five
  * panels, in the order the design lists them: what kind of server this is,
- * what it speaks for, which channels the bot may post in, and which features
- * are on. Every panel is one ephemeral message that is edited in place, so a
+ * what it speaks for, which channels the bot may post in, which features are
+ * on, and when the timed posts happen. Every panel is one ephemeral message that is edited in place, so a
  * manager sees one panel rather than a column of them, and nobody else in the
  * server sees any of it.
  *
@@ -51,7 +53,7 @@ const LINK_ROW: ReplyRow = {
 };
 
 /** The panels, named as the step buttons name them. */
-export type SetupStep = 'kind' | 'binding' | 'channels' | 'features' | 'menu' | 'done';
+export type SetupStep = 'kind' | 'binding' | 'channels' | 'features' | 'timing' | 'menu' | 'done';
 
 /** What a panel needs to know about the server it is drawn for. */
 export interface PanelState {
@@ -70,14 +72,8 @@ export function permissionName(permission: DiscordPermission): string {
   return permission.replace(/([a-z])([A-Z])/g, '$1 $2').replace('Guild', 'Server');
 }
 
-/** How a channel purpose is written for somebody who has to choose a channel for it. */
-export const PURPOSE_LABELS: Record<ChannelPurpose, string> = {
-  announcements: 'announcements',
-  digest: 'the weekly digest',
-  reminders: 'reminders',
-  exams: 'exam notices',
-  thisweek: 'the this week message',
-};
+/** How a channel purpose is written, which the registry keeps beside the purposes. */
+export const PURPOSE_LABELS = CHANNEL_PURPOSE_LABELS;
 
 /** How a category of feature is written at the head of its group. */
 const CATEGORY_LABELS: Record<FeatureCategory, string> = {
@@ -129,7 +125,7 @@ function describeBinding(installation: GuildInstallation, rsoName: string | null
 function kindPanel(state: PanelState): Reply {
   return {
     content: [
-      '**Step 1 of 4: what kind of server is this?**',
+      '**Step 1 of 5: what kind of server is this?**',
       '',
       'An organization server belongs to one organization and speaks for it. A community server is a wider space where students from several organizations read about what is coming up.',
     ].join('\n'),
@@ -166,7 +162,7 @@ function kindPanel(state: PanelState): Reply {
 function bindingPanel(state: PanelState, rsoName: string | null): Reply {
   return {
     content: [
-      '**Step 2 of 4: which organizations does this server follow?**',
+      '**Step 2 of 5: which organizations does this server follow?**',
       '',
       `This server currently follows ${describeBinding(state.installation, rsoName)}.`,
       '',
@@ -262,7 +258,7 @@ function rsoMenuPanel(options: {
 /** The panel that binds a channel to each purpose the bot posts to. */
 function channelsPanel(state: PanelState, purpose: ChannelPurpose | null): Reply {
   const lines = [
-    '**Step 3 of 4: which channels may the bot post in?**',
+    '**Step 3 of 5: which channels may the bot post in?**',
     '',
     'The bot posts nothing at all until a channel is bound to a purpose. Choose a purpose to bind a channel to it.',
     '',
@@ -334,7 +330,7 @@ export interface FeatureListState {
  */
 export function renderFeatureList(state: FeatureListState): Reply {
   const lines = [
-    '**Step 4 of 4: features**',
+    '**Step 4 of 5: features**',
     '',
     'Choose a feature to switch it on or off. A feature that cannot work says why underneath.',
   ];
@@ -375,10 +371,97 @@ export function renderFeatureList(state: FeatureListState): Reply {
   }
   rows.push({
     kind: 'row',
-    components: [stepButton('Back', 'channels'), stepButton('Done', 'done', 'primary')],
+    components: [
+      stepButton('Back', 'channels'),
+      stepButton('Timing', 'timing'),
+      stepButton('Done', 'done', 'primary'),
+    ],
   });
 
   return { content: lines.join('\n'), components: rows };
+}
+
+/**
+ * The panel that says when the timed posts happen: the day and the hour of the
+ * weekly digest, how far ahead the day of reminders are posted, and whether
+ * each digest is pinned and the one before it unpinned.
+ *
+ * Every one of these has a default that works, which is why it is the last
+ * step rather than the first: a manager who closes setup at step four still
+ * gets a digest on Sunday evening with an hour of notice before each event.
+ */
+export function timingPanel(state: PanelState): Reply {
+  const { installation } = state;
+  const lines = [
+    '**Step 5 of 5: when the timed posts happen**',
+    '',
+    `The weekly digest is posted on ${WEEKDAY_NAMES[installation.digestDay]} at ${describeHour(installation.digestHour)}, on the campus clock.`,
+    `The day of reminders are posted ${installation.reminderLeadMinutes} minutes before each event.`,
+    `Each digest is ${installation.digestPinned ? 'pinned, and the one before it unpinned' : 'not pinned'}.`,
+    '',
+    'These matter only for the features that use them, so a server with the weekly digest switched off can leave them as they are.',
+  ];
+
+  return {
+    content: lines.join('\n'),
+    components: [
+      {
+        kind: 'row',
+        components: [{
+          kind: 'select',
+          selectKind: 'string',
+          customId: 'setup:digestday',
+          placeholder: 'Choose the day the weekly digest is posted on',
+          options: WEEKDAY_NAMES.map((name, day) => ({
+            label: name,
+            value: String(day),
+            selected: day === installation.digestDay,
+          })),
+        }],
+      },
+      {
+        kind: 'row',
+        components: [{
+          kind: 'select',
+          selectKind: 'string',
+          customId: 'setup:digesthour',
+          placeholder: 'Choose the hour the weekly digest is posted at',
+          options: Array.from({ length: 24 }, (_unused, hour) => ({
+            label: describeHour(hour),
+            value: String(hour),
+            selected: hour === installation.digestHour,
+          })),
+        }],
+      },
+      {
+        kind: 'row',
+        components: [{
+          kind: 'select',
+          selectKind: 'string',
+          customId: 'setup:lead',
+          placeholder: 'Choose how far ahead the day of reminders are posted',
+          options: LEAD_CHOICES.map(choice => ({
+            label: choice.label,
+            value: String(choice.minutes),
+            selected: choice.minutes === installation.reminderLeadMinutes,
+          })),
+        }],
+      },
+      {
+        kind: 'row',
+        components: [
+          {
+            kind: 'button',
+            style: installation.digestPinned ? 'primary' : 'secondary',
+            label: installation.digestPinned ? 'Stop pinning the digest' : 'Pin each digest',
+            customId: 'setup:pinned',
+          },
+          stepButton('Back', 'features'),
+          stepButton('Done', 'done', 'primary'),
+        ],
+      },
+    ],
+  };
 }
 
 /** The configuration menu, which is every panel reachable from one place. */
@@ -400,6 +483,9 @@ function menuPanel(state: PanelState, rsoName: string | null): Reply {
     const channelId = state.channels[purpose];
     lines.push(`- ${PURPOSE_LABELS[purpose]}: ${channelId ? `<#${channelId}>` : 'no channel bound'}`);
   }
+  lines.push('');
+  lines.push(`Weekly digest: ${WEEKDAY_NAMES[state.installation.digestDay]} at ${describeHour(state.installation.digestHour)}, ${state.installation.digestPinned ? 'pinned' : 'not pinned'}`);
+  lines.push(`Day of reminders: ${state.installation.reminderLeadMinutes} minutes before each event`);
 
   return {
     content: lines.join('\n'),
@@ -411,6 +497,7 @@ function menuPanel(state: PanelState, rsoName: string | null): Reply {
           stepButton('Organizations', 'binding'),
           stepButton('Channels', 'channels'),
           stepButton('Features', 'features'),
+          stepButton('Timing', 'timing'),
         ],
       },
       { kind: 'row', components: [stepButton('Close', 'done')] },
@@ -461,6 +548,7 @@ async function panelFor(step: SetupStep, interaction: Interaction, context: Comm
   if (step === 'kind') return kindPanel(state);
   if (step === 'binding') return bindingPanel(state, await boundRsoName(state, context));
   if (step === 'channels') return channelsPanel(state, null);
+  if (step === 'timing') return timingPanel(state);
   if (step === 'features') {
     return renderFeatureList({
       features: allFeatures,
@@ -650,7 +738,7 @@ export const setupComponent: ComponentHandler = {
 
       if (binding === 'set') {
         return rsoMenuPanel({
-          heading: '**Step 2 of 4: which organizations does this server follow?**',
+          heading: '**Step 2 of 5: which organizations does this server follow?**',
           explanation: 'Choose every organization this server should hear about. Choosing again replaces the whole set.',
           customId: 'setup:followed',
           rsos,
@@ -660,7 +748,7 @@ export const setupComponent: ComponentHandler = {
       }
 
       return rsoMenuPanel({
-        heading: '**Step 2 of 4: which organization does this server speak for?**',
+        heading: '**Step 2 of 5: which organization does this server speak for?**',
         explanation: 'Binding a server to an organization needs a VIA account on that organization board, so VIA is asked to confirm it when you choose.',
         customId: 'setup:bindrso',
         rsos,
@@ -682,6 +770,31 @@ export const setupComponent: ComponentHandler = {
       const rsoId = /^\d+$/.test(chosen) ? Number(chosen) : null;
       if (rsoId === null) return panelFor('binding', interaction, context);
       return bindToRso(rsoId, interaction, context);
+    }
+
+    if (customId === 'setup:digestday' || customId === 'setup:digesthour') {
+      const state = await readState(interaction, context);
+      const value = /^\d+$/.test(chosen) ? Number(chosen) : null;
+      const day = customId === 'setup:digestday' ? value : state.installation.digestDay;
+      const hour = customId === 'setup:digesthour' ? value : state.installation.digestHour;
+      if (day === null || hour === null) return panelFor('timing', interaction, context);
+
+      await context.guilds.setDigestSchedule(guildId, day, hour);
+      return panelFor('timing', interaction, context);
+    }
+
+    if (customId === 'setup:lead') {
+      await readState(interaction, context);
+      const minutes = /^\d+$/.test(chosen) ? Number(chosen) : null;
+      if (minutes === null) return panelFor('timing', interaction, context);
+      await context.guilds.setReminderLeadMinutes(guildId, minutes);
+      return panelFor('timing', interaction, context);
+    }
+
+    if (customId === 'setup:pinned') {
+      const state = await readState(interaction, context);
+      await context.guilds.setDigestPinned(guildId, !state.installation.digestPinned);
+      return panelFor('timing', interaction, context);
     }
 
     if (customId === 'setup:purpose') {

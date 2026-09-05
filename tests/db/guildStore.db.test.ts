@@ -246,6 +246,114 @@ describe('the server records', () => {
     });
   });
 
+  /**
+   * What a server chose about its timed posts. The defaults matter as much as
+   * the settings: a server that switches the weekly digest on without opening
+   * the timing panel posts on Sunday evening rather than at midnight.
+   */
+  describe('the timing of the proactive posts', () => {
+    it('starts on Sunday at six in the evening, with an hour of notice and no pinning', async () => {
+      await store().createInstallation(guild, manager);
+      const installation = (await store().getInstallation(guild))!;
+
+      expect(installation.digestDay).toBe(0);
+      expect(installation.digestHour).toBe(18);
+      expect(installation.reminderLeadMinutes).toBe(60);
+      expect(installation.digestPinned).toBe(false);
+    });
+
+    it('keeps the day and the hour a manager chose', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setDigestSchedule(guild, 3, 9);
+      const installation = (await store().getInstallation(guild))!;
+
+      expect(installation.digestDay).toBe(3);
+      expect(installation.digestHour).toBe(9);
+    });
+
+    it('keeps the lead time and the pinning a manager chose', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setReminderLeadMinutes(guild, 120);
+      await store().setDigestPinned(guild, true);
+      const installation = (await store().getInstallation(guild))!;
+
+      expect(installation.reminderLeadMinutes).toBe(120);
+      expect(installation.digestPinned).toBe(true);
+    });
+
+    it('finds every server whose digest falls in one day and hour', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setKind(guild, 'rso');
+      await store().setBinding(guild, { binding: 'rso', rsoId: 4 });
+
+      await store().createInstallation(other, manager);
+      await store().setKind(other, 'community');
+      await store().setBinding(other, { binding: 'all' });
+      await store().setDigestSchedule(other, 3, 9);
+
+      expect((await store().listInstallationsForDigest(0, 18)).map(one => one.guildId)).toEqual([guild]);
+      expect((await store().listInstallationsForDigest(3, 9)).map(one => one.guildId)).toEqual([other]);
+    });
+
+    it('leaves out a server that has never been set up, whatever hour it is', async () => {
+      await store().createInstallation(guild, manager);
+      expect(await store().listInstallationsForDigest(0, 18)).toEqual([]);
+    });
+  });
+
+  /**
+   * The two messages the bot has to be able to find again: the living this
+   * week message it edits in place and keeps pinned, and the last digest it
+   * unpins when it pins the next one.
+   */
+  describe('the messages a server has of its own', () => {
+    it('has nothing to say about a message that was never posted', async () => {
+      await store().createInstallation(guild, manager);
+      expect(await store().getGuildMessage(guild, 'thisweek')).toBe(null);
+    });
+
+    it('remembers where a message was posted, and replaces it when it moves', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setGuildMessage(guild, 'thisweek', {
+        channelId: '700000000000000001',
+        messageId: '800000000000000001',
+      });
+      await store().setGuildMessage(guild, 'thisweek', {
+        channelId: '700000000000000002',
+        messageId: '800000000000000002',
+      });
+
+      const held = await store().getGuildMessage(guild, 'thisweek');
+      expect(held).toMatchObject({
+        channelId: '700000000000000002',
+        messageId: '800000000000000002',
+      });
+      expect(await db.select().from(schema.guildMessages)).toHaveLength(1);
+    });
+
+    it('keeps the two purposes apart, and lists both for a server', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setGuildMessage(guild, 'thisweek', {
+        channelId: '700000000000000001', messageId: '800000000000000001',
+      });
+      await store().setGuildMessage(guild, 'digest', {
+        channelId: '700000000000000003', messageId: '800000000000000003',
+      });
+
+      const held = await store().listGuildMessages(guild);
+      expect(held.map(one => one.purpose).sort()).toEqual(['digest', 'thisweek']);
+    });
+
+    it('forgets a message that is no longer there', async () => {
+      await store().createInstallation(guild, manager);
+      await store().setGuildMessage(guild, 'thisweek', {
+        channelId: '700000000000000001', messageId: '800000000000000001',
+      });
+      await store().removeGuildMessage(guild, 'thisweek');
+      expect(await store().getGuildMessage(guild, 'thisweek')).toBe(null);
+    });
+  });
+
   it('says it deleted nothing for a server the bot was never installed in', async () => {
     expect(await store().removeGuild(guild)).toEqual({
       features: 0, channels: 0, followedRsos: 0, installation: false,
@@ -257,11 +365,15 @@ describe('the server records', () => {
     await store().setFeatureEnabled(guild, 'events.list', false);
     await store().bindChannel(guild, 'announcements', '700000000000000001');
     await store().setFollowedRsos(guild, [4]);
+    await store().setGuildMessage(guild, 'thisweek', {
+      channelId: '700000000000000001', messageId: '800000000000000001',
+    });
     await store().removeGuild(guild);
 
     expect(await db.select().from(schema.guildFeatures)).toEqual([]);
     expect(await db.select().from(schema.guildChannels)).toEqual([]);
     expect(await db.select().from(schema.guildFollowedRsos)).toEqual([]);
+    expect(await db.select().from(schema.guildMessages)).toEqual([]);
     expect(await db.select().from(schema.guildInstallations)).toEqual([]);
   });
 });

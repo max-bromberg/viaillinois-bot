@@ -2,7 +2,9 @@ import { featureById, type DiscordPermission } from '../features/registry.ts';
 import { campusDatePlus, campusToday, toInstant } from '../render/campusTime.ts';
 import { placeOf, trimDescription } from '../render/eventCard.ts';
 import { NO_OUTBOX_ENTRY, guildTarget, type Deliveries } from '../delivery/deliveries.ts';
-import { isMissingAccess, type DiscordActions, type ScheduledEventDraft } from '../discord/adapter.ts';
+import {
+  isMissingAccess, isMissingMessage, type DiscordActions, type ScheduledEventDraft,
+} from '../discord/adapter.ts';
 import type { EventMirrors } from './eventMirrors.ts';
 import type { FeatureDisabler } from '../guilds/disable.ts';
 import type { GuildInstallation, GuildStore } from '../guilds/store.ts';
@@ -233,12 +235,12 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
 
     /**
      * What removal clears before the rows that say where it is are deleted.
-     * Every scheduled event the bot created in the server goes, and the rows
-     * go with them.
+     * Every scheduled event the bot created in the server goes, and the one
+     * message it pinned there is unpinned, and the rows go with them.
      *
-     * Nothing is unpinned yet, because nothing is pinned yet: the message the
-     * bot pins is the living this week message, which arrives in the third
-     * increment, and its unpinning belongs here when it does.
+     * The pinned message is the living this week message. It is unpinned
+     * rather than deleted, because it is a message in the server's own channel
+     * and deleting other people's channel history is not the bot's to do.
      */
     async removeGuildPresence(guildId: string): Promise<RemovedGuildPresence> {
       const held = await mirrors.listByGuild(guildId);
@@ -258,8 +260,26 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
         }
       }
 
+      let unpinnedMessages = 0;
+      for (const message of await guilds.listGuildMessages(guildId)) {
+        try {
+          await actions.unpinMessage(message.channelId, message.messageId);
+          unpinnedMessages += 1;
+        } catch (err) {
+          // A message somebody deleted, or a channel the bot can no longer
+          // reach, is a message that is not pinned any more either way.
+          if (!isMissingMessage(err) && !isMissingAccess(err)) {
+            console.error(
+              `unpinning the ${message.purpose} message in server ${guildId} failed:`,
+              (err as Error).message,
+            );
+          }
+        }
+        await guilds.removeGuildMessage(guildId, message.purpose);
+      }
+
       await mirrors.removeGuild(guildId);
-      return { scheduledEvents, unpinnedMessages: 0 };
+      return { scheduledEvents, unpinnedMessages };
     },
   };
 }

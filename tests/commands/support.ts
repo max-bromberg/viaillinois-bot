@@ -5,8 +5,11 @@ import { createFakeViaClient, type FakeViaClient } from '../../src/via/fake.ts';
 import { featureById, type ChannelPurpose } from '../../src/features/registry.ts';
 import type { RateDecision, RateTier } from '../../src/ratelimit/windows.ts';
 import type {
-  BindingChoice, GuildBinding, GuildInstallation, GuildKind, GuildStore, RemovedRows,
+  BindingChoice, GuildBinding, GuildInstallation, GuildKind, GuildMessage,
+  GuildMessagePurpose, GuildStore, PostedMessageRef, RemovedRows,
 } from '../../src/guilds/store.ts';
+import type { FeedStore } from '../../src/feed/store.ts';
+import { memoryFeedStore } from '../support/feed.ts';
 
 /** A plain interaction in the shape the adapter hands to a command. */
 export function interaction(overrides: Partial<Interaction> = {}): Interaction {
@@ -42,10 +45,16 @@ export function memoryGuildStore(): GuildStore {
     binding: GuildBinding | null;
     rsoId: number | null;
     installedBy: string;
+    digestDay: number;
+    digestHour: number;
+    reminderLeadMinutes: number;
+    digestPinned: boolean;
   }>();
   const features = new Map<string, Map<string, boolean>>();
   const channels = new Map<string, Map<string, string>>();
   const followed = new Map<string, number[]>();
+  const messages = new Map<string, GuildMessage>();
+  const messageKey = (guildId: string, purpose: GuildMessagePurpose) => `${guildId}|${purpose}`;
 
   const featuresOf = (guildId: string) => {
     if (!features.has(guildId)) features.set(guildId, new Map());
@@ -59,7 +68,16 @@ export function memoryGuildStore(): GuildStore {
   return {
     async createInstallation(guildId, installedBy) {
       if (installations.has(guildId)) return;
-      installations.set(guildId, { kind: null, binding: null, rsoId: null, installedBy });
+      installations.set(guildId, {
+        kind: null,
+        binding: null,
+        rsoId: null,
+        installedBy,
+        digestDay: 0,
+        digestHour: 18,
+        reminderLeadMinutes: 60,
+        digestPinned: false,
+      });
     },
     async getInstallation(guildId) {
       const row = installations.get(guildId);
@@ -72,6 +90,10 @@ export function memoryGuildStore(): GuildStore {
         installedBy: row.installedBy,
         installedAt: '2026-09-05 09:00:00',
         mirrorWindowDays: 14,
+        digestDay: row.digestDay,
+        digestHour: row.digestHour,
+        reminderLeadMinutes: row.reminderLeadMinutes,
+        digestPinned: row.digestPinned,
         isSetUp: row.kind !== null && row.binding !== null,
       };
       return installation;
@@ -132,6 +154,41 @@ export function memoryGuildStore(): GuildStore {
       }
       return all;
     },
+    async setDigestSchedule(guildId, day, hour) {
+      const row = installations.get(guildId);
+      if (!row) return;
+      row.digestDay = day;
+      row.digestHour = hour;
+    },
+    async setReminderLeadMinutes(guildId, minutes) {
+      const row = installations.get(guildId);
+      if (row) row.reminderLeadMinutes = minutes;
+    },
+    async setDigestPinned(guildId, pinned) {
+      const row = installations.get(guildId);
+      if (row) row.digestPinned = pinned;
+    },
+    async listInstallationsForDigest(dayOfWeek, hour) {
+      const due: GuildInstallation[] = [];
+      for (const [guildId, row] of installations) {
+        if (row.kind === null || row.binding === null) continue;
+        if (row.digestDay !== dayOfWeek || row.digestHour !== hour) continue;
+        due.push((await this.getInstallation(guildId))!);
+      }
+      return due;
+    },
+    async getGuildMessage(guildId, purpose) {
+      return messages.get(messageKey(guildId, purpose)) ?? null;
+    },
+    async setGuildMessage(guildId, purpose, posted: PostedMessageRef) {
+      messages.set(messageKey(guildId, purpose), { guildId, purpose, ...posted });
+    },
+    async listGuildMessages(guildId) {
+      return [...messages.values()].filter(one => one.guildId === guildId);
+    },
+    async removeGuildMessage(guildId, purpose) {
+      messages.delete(messageKey(guildId, purpose));
+    },
     async removeGuild(guildId) {
       const removed: RemovedRows = {
         features: featuresOf(guildId).size,
@@ -142,6 +199,9 @@ export function memoryGuildStore(): GuildStore {
       features.delete(guildId);
       channels.delete(guildId);
       followed.delete(guildId);
+      for (const held of [...messages.values()].filter(one => one.guildId === guildId)) {
+        messages.delete(messageKey(held.guildId, held.purpose));
+      }
       return removed;
     },
   };
@@ -155,6 +215,7 @@ export interface TestContext {
   deleted: string[];
   consumed: Array<{ subject: string; tier: RateTier }>;
   guilds: GuildStore;
+  feed: FeedStore;
   /** The fake clock, which the fake sleep moves forward. */
   clockAt: () => Date;
 }
@@ -168,6 +229,7 @@ export interface TestContext {
 export function testContext(options: {
   decide?: (subject: string, tier: RateTier) => RateDecision;
   guilds?: GuildStore;
+  feed?: FeedStore;
 } = {}): TestContext {
   const via = createFakeViaClient();
   const directMessages: Array<{ discordUserId: string; content: string }> = [];
@@ -175,11 +237,13 @@ export function testContext(options: {
   const deleted: string[] = [];
   const consumed: Array<{ subject: string; tier: RateTier }> = [];
   const guilds = options.guilds ?? memoryGuildStore();
+  const feed = options.feed ?? memoryFeedStore();
   let clock = new Date('2026-09-05T14:30:00Z');
 
   const context: CommandContext = {
     via,
     guilds,
+    feed,
     websiteUrl: 'https://viaillinois.com',
     rateWindows: {
       consume: async (subject: string, tier: RateTier) => {
@@ -199,5 +263,5 @@ export function testContext(options: {
     sleep: async (milliseconds: number) => { clock = new Date(clock.getTime() + milliseconds); },
   };
 
-  return { context, via, guilds, directMessages, scheduled, deleted, consumed, clockAt: () => clock };
+  return { context, via, guilds, feed, directMessages, scheduled, deleted, consumed, clockAt: () => clock };
 }

@@ -48,6 +48,16 @@ export const guildInstallations = mysqlTable('Guild_Installations', {
   // How far ahead native scheduled events are mirrored. The design's default
   // is two weeks, adjustable per server.
   mirrorWindowDays: int('mirror_window_days').default(14).notNull(),
+  // When the weekly digest is posted, on the campus clock, with days running
+  // zero to six from Sunday. The defaults are the ones setup offers, which is
+  // Sunday at six in the evening, so a server that switches the digest on
+  // without opening the timing panel still posts at a sensible hour.
+  digestDay: tinyint('digest_day').default(0).notNull(),
+  digestHour: tinyint('digest_hour').default(18).notNull(),
+  // How far ahead the day of reminders are posted.
+  reminderLeadMinutes: int('reminder_lead_minutes').default(60).notNull(),
+  // Whether each digest is pinned and the one before it unpinned.
+  digestPinned: boolean('digest_pinned').default(false).notNull(),
 }, (table) => [
   primaryKey({ columns: [table.guildId], name: 'Guild_Installations_guild_id' }),
 ]);
@@ -88,6 +98,26 @@ export const guildChannels = mysqlTable('Guild_Channels', {
   channelId: snowflake('channel_id').notNull(),
 }, (table) => [
   primaryKey({ columns: [table.guildId, table.purpose], name: 'Guild_Channels_guild_id_purpose' }),
+]);
+
+/**
+ * A message the bot posted in a server and has to find again: the living this
+ * week message, which it edits in place and keeps pinned, and the last weekly
+ * digest, which it unpins when it pins the next one. One row per server and
+ * purpose, replaced when the message is replaced.
+ *
+ * This is not Event_Mirrors, which holds what one event became in one server.
+ * These messages are about a week rather than about an event, and there is at
+ * most one of each per server.
+ */
+export const guildMessages = mysqlTable('Guild_Messages', {
+  guildId: snowflake('guild_id').notNull().references(() => guildInstallations.guildId, { onDelete: 'cascade' }),
+  purpose: varchar('purpose', { length: 32 }).notNull(),
+  channelId: snowflake('channel_id').notNull(),
+  messageId: snowflake('message_id').notNull(),
+  postedAt: stamp('posted_at'),
+}, (table) => [
+  primaryKey({ columns: [table.guildId, table.purpose], name: 'Guild_Messages_guild_id_purpose' }),
 ]);
 
 /**
@@ -240,4 +270,23 @@ export const rateWindows = mysqlTable('Rate_Windows', {
 }, (table) => [
   primaryKey({ columns: [table.subject, table.bucketStart], name: 'Rate_Windows_subject_bucket_start' }),
   index('idx_rate_windows_bucket').on(table.bucketStart),
+]);
+
+/**
+ * When each scheduled job last ran, on the campus clock.
+ *
+ * The digests, the reminders and the living message are jobs on an hourly
+ * clock, and section 7 of the design asks that a bot which was down over a
+ * digest hour sends the digest when it returns rather than skipping the week
+ * or sending it twice. Skipping is what a job with no memory does, and sending
+ * twice is what a job that remembers only within one process does, so the
+ * memory is a row here. One row per job, replaced on every run.
+ */
+export const jobRuns = mysqlTable('Job_Runs', {
+  jobName: varchar('job_name', { length: 64 }).notNull(),
+  /** The campus hour the job last ran for, which is where a catch up resumes. */
+  lastRunAt: datetime('last_run_at', { mode: 'string' }).notNull(),
+  updatedAt: stamp('updated_at'),
+}, (table) => [
+  primaryKey({ columns: [table.jobName], name: 'Job_Runs_job_name' }),
 ]);

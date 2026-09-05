@@ -24,6 +24,20 @@ export const CHANNEL_PURPOSES = ['announcements', 'digest', 'reminders', 'exams'
 export type ChannelPurpose = (typeof CHANNEL_PURPOSES)[number];
 
 /**
+ * How a channel purpose is written for somebody who has to choose a channel
+ * for it, and for the notice a manager is sent when a feature had to be
+ * switched off because none is bound. Both read the same words, because they
+ * are about the same setting.
+ */
+export const CHANNEL_PURPOSE_LABELS: Record<ChannelPurpose, string> = {
+  announcements: 'announcements',
+  digest: 'the weekly digest',
+  reminders: 'reminders',
+  exams: 'exam notices',
+  thisweek: 'the this week message',
+};
+
+/**
  * Where an interaction can come from, named as Discord names them: a server,
  * the bot's own direct messages, or a group direct message and any other
  * private channel reached through user installation.
@@ -78,6 +92,15 @@ export interface AlternateCommandName {
 }
 
 export interface FeatureCommand {
+  /**
+   * The group the command sits in, when it sits in one that the tier does not
+   * already decide. The editor and manager tiers sit under the via group
+   * because that is what they are, and a group named here is for a set of
+   * student commands that belong together, such as the personal feed
+   * settings, so that a person types the thing rather than a list of
+   * unrelated top level names.
+   */
+  group?: string;
   /** The name a person types, without the group. */
   name: string;
   /** What Discord shows beside the name, at most a hundred characters. */
@@ -107,6 +130,16 @@ export interface Feature {
   /** The command the feature is reached by, when there is one. */
   command?: FeatureCommand;
 }
+
+/**
+ * What Discord shows beside a command group, keyed by the group name. A group
+ * is one command with subcommands under it as far as Discord is concerned, and
+ * one command needs one description.
+ */
+export const COMMAND_GROUP_DESCRIPTIONS: Record<string, string> = {
+  via: 'Set up VIA in this server and run your organization events.',
+  feed: 'Choose what VIA sends you about the organizations you follow.',
+};
 
 const EVERYWHERE: readonly InteractionContext[] = ['guild', 'botDm', 'privateChannel'];
 
@@ -283,6 +316,113 @@ export const features: readonly Feature[] = [
       name: 'remove',
       description: 'Remove the bot and everything it holds for this server.',
     },
+  },
+  {
+    id: 'feed.follow',
+    description: 'Follow and unfollow organizations, or follow every organization in ECE, which is what the personal digest and the personal reminders are drawn from.',
+    category: 'command',
+    defaultEnabled: true,
+    requiredPermissions: [],
+    channelPurposes: [],
+    tier: 'linked',
+    contexts: EVERYWHERE,
+    command: {
+      name: 'follow',
+      description: 'Follow an organization, so that VIA writes to you about it.',
+      options: [
+        {
+          name: 'rso',
+          description: 'The organization, by name, or every organization in ECE.',
+          kind: 'string',
+          autocomplete: true,
+        },
+      ],
+      // The three names are one feature because they are one set of rows:
+      // following, unfollowing and reading back what is followed are the same
+      // question asked three ways. The organization is optional on all three
+      // because Discord gives every name the same options, and each of them
+      // has something to say without one.
+      alternateNames: [
+        { name: 'unfollow', description: 'Stop following an organization.' },
+        { name: 'following', description: 'See the organizations you follow.' },
+      ],
+    },
+  },
+  {
+    id: 'feed.digest',
+    description: 'Send a weekly direct message listing what is coming up for the organizations you follow, on the day and at the hour you choose.',
+    category: 'command',
+    defaultEnabled: true,
+    requiredPermissions: [],
+    channelPurposes: [],
+    tier: 'linked',
+    contexts: EVERYWHERE,
+    command: {
+      group: 'feed',
+      name: 'settings',
+      description: 'Change what VIA sends you and when.',
+    },
+  },
+  {
+    id: 'feed.reminders',
+    description: 'Send a direct message before each event you asked to be reminded of, at the lead time you choose.',
+    category: 'command',
+    defaultEnabled: true,
+    requiredPermissions: [],
+    channelPurposes: [],
+    tier: 'linked',
+    contexts: EVERYWHERE,
+    command: {
+      group: 'feed',
+      name: 'reminders',
+      description: 'See the events you asked to be reminded of.',
+    },
+  },
+  {
+    id: 'feed.calendar',
+    description: 'Give you a private calendar address carrying every event of the organizations you follow, so that your own calendar stays current.',
+    category: 'command',
+    defaultEnabled: true,
+    requiredPermissions: [],
+    channelPurposes: [],
+    tier: 'linked',
+    contexts: EVERYWHERE,
+    command: {
+      name: 'calendar',
+      description: 'Get your private VIA calendar address.',
+    },
+  },
+  {
+    id: 'announce.digest',
+    description: 'Post one message a week in the digest channel, listing the coming week for the organizations this server follows, grouped by day.',
+    category: 'proactive',
+    defaultEnabled: false,
+    requiredPermissions: ['ViewChannel', 'SendMessages'],
+    channelPurposes: ['digest'],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
+    id: 'announce.dayof',
+    description: 'Post a short reminder in the reminders channel before each event of the day, at the lead time this server chooses.',
+    category: 'proactive',
+    defaultEnabled: false,
+    requiredPermissions: ['ViewChannel', 'SendMessages'],
+    channelPurposes: ['reminders'],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
+    id: 'living.thisweek',
+    description: 'Keep one pinned message in the this week channel listing the events of the current week, edited in place whenever any of them changes.',
+    category: 'proactive',
+    defaultEnabled: false,
+    // The message is pinned once and unpinned when the bot is removed, which
+    // is what the Manage Messages permission is for.
+    requiredPermissions: ['ViewChannel', 'SendMessages', 'ManageMessages'],
+    channelPurposes: ['thisweek'],
+    tier: 'manager',
+    contexts: ['guild'],
   },
   {
     id: 'identity.unlink',

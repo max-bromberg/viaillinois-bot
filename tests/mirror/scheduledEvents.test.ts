@@ -320,6 +320,37 @@ describe('clearing what the bot put into a server', () => {
     expect(await mirror.removeGuildPresence(GUILD)).toEqual({ scheduledEvents: 0, unpinnedMessages: 0 });
   });
 
+  /**
+   * The living this week message is the one message the bot pins, and section
+   * 5 of the design has removal unpin it along with everything else the bot
+   * put into the server.
+   */
+  it('unpins the messages it pinned there and forgets where they were', async () => {
+    const { mirror, guilds, actions } = await built();
+    await guilds.setGuildMessage(GUILD, 'thisweek', {
+      channelId: '700000000000000001',
+      messageId: '800000000000000001',
+    });
+
+    const cleared = await mirror.removeGuildPresence(GUILD);
+    expect(cleared.unpinnedMessages).toBe(1);
+    expect(actions.done.filter(one => one.action === 'unpin')).toHaveLength(1);
+    expect(await guilds.listGuildMessages(GUILD)).toEqual([]);
+  });
+
+  it('carries on when the message it pinned is no longer there', async () => {
+    const { mirror, guilds, actions } = await built();
+    await guilds.setGuildMessage(GUILD, 'thisweek', {
+      channelId: '700000000000000001',
+      messageId: '800000000000000001',
+    });
+    actions.failNextWith(Object.assign(new Error('Unknown Message'), { code: 10008 }));
+
+    const cleared = await mirror.removeGuildPresence(GUILD);
+    expect(cleared.unpinnedMessages).toBe(0);
+    expect(await guilds.listGuildMessages(GUILD)).toEqual([]);
+  });
+
   it('carries on when Discord has already forgotten one of the scheduled events', async () => {
     const { mirror, installation, actions } = await built();
     await mirror.apply(installation, event(), 1);

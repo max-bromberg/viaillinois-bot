@@ -28,6 +28,18 @@ export interface HealthProbes {
    * the deploy for that would refuse every deploy.
    */
   outboxConsumer?: () => ConsumerReport;
+  /**
+   * When the scheduler last made a pass. The digests and the reminders are
+   * owed to people rather than asked for by them, so a scheduler that has
+   * quietly stopped is worth seeing, and it is reported for the same reason
+   * the consumer is and on the same terms: it is not a readiness check.
+   */
+  scheduler?: () => SchedulerReport;
+}
+
+/** What the scheduler says about itself, or nothing before its first pass. */
+export interface SchedulerReport {
+  lastTickAt: string | null;
 }
 
 /** What the consumer says about itself, or nothing before its first poll. */
@@ -47,6 +59,8 @@ export interface HealthReport {
   outboxCursor: number | null;
   /** When the consumer last read the outbox, in campus wall clock. */
   lastPollAt: string | null;
+  /** When the scheduler last made a pass, in campus wall clock. */
+  schedulerLastTickAt: string | null;
 }
 
 export interface HealthServer {
@@ -92,6 +106,15 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
     console.error('health check outboxConsumer failed:', (err as Error).message);
   }
 
+  let scheduler: SchedulerReport = { lastTickAt: null };
+  try {
+    scheduler = probes.scheduler?.() ?? scheduler;
+  } catch (err) {
+    // A scheduler that cannot say when it last ran says nothing, rather than
+    // failing a check that is about the three connections.
+    console.error('health check scheduler failed:', (err as Error).message);
+  }
+
   const ok = migrationVersion !== null && gateway && database && viaPlatform;
   return {
     code: ok ? 200 : 503,
@@ -104,6 +127,7 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
       viaPlatform,
       outboxCursor: consumer.cursor,
       lastPollAt: consumer.lastPollAt,
+      schedulerLastTickAt: scheduler.lastTickAt,
     },
   };
 }

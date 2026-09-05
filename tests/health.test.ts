@@ -39,6 +39,7 @@ describe('GET /health', () => {
       viaPlatform: true,
       outboxCursor: null,
       lastPollAt: null,
+      schedulerLastTickAt: null,
     });
   });
 
@@ -160,5 +161,36 @@ describe('what the health endpoint says about the outbox consumer', () => {
     expect(status).toBe(200);
     expect(body.outboxCursor).toBe(null);
     expect(body.lastPollAt).toBe(null);
+  });
+});
+
+/**
+ * The scheduler is reported for the same reason the consumer is: a scheduler
+ * that has quietly stopped looks exactly like one with nothing to do, and the
+ * cutover has to be able to tell them apart. It is not a readiness check
+ * either, because a bot that started a moment ago has not made a pass yet.
+ */
+describe('what the health endpoint says about the scheduler', () => {
+  it('reports when the scheduler last made a pass', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      scheduler: () => ({ lastTickAt: '2026-09-05 09:30:00' }),
+    });
+    expect(status).toBe(200);
+    expect(body.schedulerLastTickAt).toBe('2026-09-05 09:30:00');
+  });
+
+  it('reports nothing rather than a made up time before the first pass', async () => {
+    const { body } = await health({ ...healthyProbes(), scheduler: () => ({ lastTickAt: null }) });
+    expect(body.schedulerLastTickAt).toBe(null);
+  });
+
+  it('reports nothing rather than failing when the scheduler state cannot be read', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      scheduler: () => { throw new Error('the scheduler is not wired'); },
+    });
+    expect(status).toBe(200);
+    expect(body.schedulerLastTickAt).toBe(null);
   });
 });

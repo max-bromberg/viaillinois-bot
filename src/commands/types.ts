@@ -2,6 +2,7 @@ import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.
 import type { ViaClient } from '../via/client.ts';
 import type { GuildStore } from '../guilds/store.ts';
 import type { RateWindows } from '../ratelimit/windows.ts';
+import type { FeedStore } from '../feed/store.ts';
 
 /**
  * What a command is given and what it answers with.
@@ -15,6 +16,8 @@ export interface CommandContext {
   via: ViaClient;
   /** What each server chose: its kind, its binding, its channels and its toggles. */
   guilds: GuildStore;
+  /** What each person chose: what they follow, when the bot writes to them, and their reminders. */
+  feed: FeedStore;
   /** The public address of the website, which the link buttons open. */
   websiteUrl: string;
   rateWindows: RateWindows;
@@ -25,10 +28,10 @@ export interface CommandContext {
    * before it deletes the rows that say where those posts are.
    *
    * The design has removal delete every scheduled event the bot created and
-   * unpin the message it pinned. The scheduled events are deleted by the
-   * scheduled event mirror, which is what the entry point gives this. Nothing
-   * is unpinned yet, because the one message the bot pins is the living this
-   * week message, which arrives in the third increment.
+   * unpin the message it pinned. Both are done by the scheduled event mirror,
+   * which is what the entry point gives this: the scheduled events are its
+   * own, and the pinned message is the living this week message, which it
+   * unpins through the same hook.
    */
   removeGuildPresence?: (guildId: string) => Promise<RemovedGuildPresence>;
   /** Send one direct message, which only ever goes to a linked person. */

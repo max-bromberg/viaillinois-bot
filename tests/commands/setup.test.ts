@@ -211,8 +211,49 @@ describe('the panels, in the order setup walks through them', () => {
   it('moves from the channels to the features', async () => {
     const { context } = await started();
     const reply = await setupComponent.run(press('setup:step:features'), context);
-    expect(reply.content).toContain('Step 4 of 4');
+    expect(reply.content).toContain('Step 4 of 5');
     expect(selectIn(reply, 'setup:feature')).toBeDefined();
+  });
+
+  /**
+   * The fifth panel is when the timed posts happen. Its defaults are the ones
+   * the design names, Sunday at six in the evening and an hour of notice, so a
+   * manager who never opens it still gets a digest at a sensible hour.
+   */
+  it('moves from the features to the timing, and writes the defaults out', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(press('setup:step:timing'), context);
+
+    expect(reply.content).toContain('Step 5 of 5');
+    expect(reply.content).toContain('Sunday');
+    expect(reply.content).toContain('6 in the evening');
+    expect(reply.content).toContain('60 minutes');
+    expect(reply.content).toContain('not pinned');
+  });
+
+  it('changes the day and the hour the weekly digest is posted at', async () => {
+    const { context, guilds } = await started();
+    await setupComponent.run(choose('setup:digestday', ['3']), context);
+    await setupComponent.run(choose('setup:digesthour', ['9']), context);
+
+    const installation = (await guilds.getInstallation(GUILD))!;
+    expect(installation.digestDay).toBe(3);
+    expect(installation.digestHour).toBe(9);
+  });
+
+  it('changes how far ahead the day of reminders are posted', async () => {
+    const { context, guilds } = await started();
+    await setupComponent.run(choose('setup:lead', ['120']), context);
+    expect((await guilds.getInstallation(GUILD))!.reminderLeadMinutes).toBe(120);
+  });
+
+  it('turns the pinning of the digest on and off again', async () => {
+    const { context, guilds } = await started();
+    await setupComponent.run(press('setup:pinned'), context);
+    expect((await guilds.getInstallation(GUILD))!.digestPinned).toBe(true);
+
+    await setupComponent.run(press('setup:pinned'), context);
+    expect((await guilds.getInstallation(GUILD))!.digestPinned).toBe(false);
   });
 
   it('lists every feature the registry has, with its description and its state', async () => {

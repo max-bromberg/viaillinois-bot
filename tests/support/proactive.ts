@@ -7,6 +7,8 @@ import type {
 import type {
   DiscordActions, PostOptions, Reply, ScheduledEventDraft,
 } from '../../src/discord/adapter.ts';
+import type { DirectMessageDelivery, DirectMessageOutcome } from '../../src/discord/directMessages.ts';
+import type { JobRuns } from '../../src/jobs/runs.ts';
 import type { DiscordPermission } from '../../src/features/registry.ts';
 
 /**
@@ -239,6 +241,59 @@ export function recordingDirectMessages() {
     send: async (discordUserId: string, content: string): Promise<boolean> => {
       sent.push({ discordUserId, content });
       return true;
+    },
+  };
+}
+
+/** Job_Runs as a map, which is all the scheduler asks of it. */
+export function memoryJobRuns(): JobRuns {
+  const rows = new Map<string, string>();
+  return {
+    async lastRunAt(jobName: string): Promise<string | null> {
+      return rows.get(jobName) ?? null;
+    },
+    async recordRun(jobName: string, at: string): Promise<void> {
+      rows.set(jobName, at);
+    },
+  };
+}
+
+/** What one direct message a job sent looked like, as the recording sender writes it down. */
+export interface RecordedDirectMessage {
+  discordUserId: string;
+  reply: Reply;
+}
+
+export interface RecordingDelivery {
+  readonly sent: RecordedDirectMessage[];
+  deliver: DirectMessageDelivery;
+  /** Make every message to this person come back as one they do not accept. */
+  block(discordUserId: string): void;
+  /** Make the next message fail for a reason that is nobody's answer. */
+  failNext(): void;
+}
+
+/**
+ * The direct messages a job sent, and the two answers it has to handle: a
+ * person who does not accept them, and a failure that leaves the message owed.
+ */
+export function recordingDelivery(): RecordingDelivery {
+  const sent: RecordedDirectMessage[] = [];
+  const blocked = new Set<string>();
+  let failNext = false;
+
+  return {
+    sent,
+    block(discordUserId: string): void { blocked.add(discordUserId); },
+    failNext(): void { failNext = true; },
+    deliver: async (discordUserId: string, reply: Reply): Promise<DirectMessageOutcome> => {
+      if (failNext) {
+        failNext = false;
+        return 'failed';
+      }
+      if (blocked.has(discordUserId)) return 'blocked';
+      sent.push({ discordUserId, reply });
+      return 'sent';
     },
   };
 }

@@ -266,6 +266,17 @@ export interface InterestAnswer {
   interestCount: number;
 }
 
+/**
+ * The private calendar address a person subscribes to from their own calendar
+ * application, and when its token was last rotated. The token lives in the
+ * address, so asking for the calendar again is what rotating it means, and the
+ * bot never stores either one.
+ */
+export interface PersonalCalendar {
+  address: string;
+  rotatedAt: string;
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -294,6 +305,18 @@ export interface ViaClient {
   readOutbox(query: OutboxQuery): Promise<OutboxPage>;
   /** Set or clear one person's interest in an event, and read the count after it. */
   setInterest(eventId: number, interest: InterestSignal): Promise<InterestAnswer>;
+  /**
+   * Create the acting person's calendar, or rotate the token of the one they
+   * have, and answer with the address. A set of null means every organization
+   * in ECE.
+   */
+  createPersonalCalendar(rsoIds: readonly number[] | null, actingDiscordUserId: string): Promise<PersonalCalendar>;
+  /**
+   * Tell the web platform which organizations the acting person's calendar
+   * carries, without rotating the token, which is what a change of follows
+   * asks for.
+   */
+  updatePersonalCalendarRsos(rsoIds: readonly number[] | null, actingDiscordUserId: string): Promise<void>;
   /** Whether the web platform answers. */
   health(): Promise<boolean>;
 }
@@ -482,6 +505,24 @@ export function outboxSeries(entry: OutboxEntry): SeriesChange | null {
     // An entry that names no affected events has touched the events it holds.
     affectedEventIds: affected.length > 0 ? affected : eventIds,
   };
+}
+
+export function parsePersonalCalendar(body: unknown): PersonalCalendar {
+  const raw = body as Record<string, unknown>;
+  return {
+    address: String(raw.address ?? ''),
+    rotatedAt: String(raw.rotated_at ?? ''),
+  };
+}
+
+/**
+ * What both calendar calls send. A set of null is sent as null rather than
+ * left out, because the web platform has to tell "every organization" from
+ * "the person named nothing" and only one of those is a calendar of the whole
+ * of ECE.
+ */
+export function calendarRsosBody(rsoIds: readonly number[] | null): Record<string, unknown> {
+  return { rso_ids: rsoIds === null ? null : [...rsoIds] };
 }
 
 export function parseInterestAnswer(body: unknown): InterestAnswer {

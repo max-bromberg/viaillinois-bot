@@ -10,6 +10,10 @@ import {
   eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponent, rsoComponent,
 } from './events.ts';
 import { setupCommand, configCommand, removeCommand, setupComponent } from './setup.ts';
+import {
+  followCommand, unfollowCommand, followingCommand, calendarCommand,
+  feedSettingsCommand, feedRemindersCommand, feedComponent,
+} from './feed.ts';
 
 export { describeWait } from './types.ts';
 export type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
@@ -45,6 +49,12 @@ export const handlers: readonly CommandHandler[] = [
   setupCommand,
   configCommand,
   removeCommand,
+  followCommand,
+  unfollowCommand,
+  followingCommand,
+  feedSettingsCommand,
+  feedRemindersCommand,
+  calendarCommand,
 ];
 
 /**
@@ -58,6 +68,7 @@ export const componentHandlers: readonly ComponentHandler[] = [
   eventComponent,
   rsoComponent,
   setupComponent,
+  feedComponent,
 ];
 
 export const UNKNOWN_COMMAND_MESSAGE =
