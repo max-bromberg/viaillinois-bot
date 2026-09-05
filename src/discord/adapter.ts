@@ -1,7 +1,8 @@
 import {
-  ChannelType, ComponentType, InteractionContextType, InteractionType, MessageFlags,
-  PermissionFlagsBits,
+  ChannelType, ComponentType, GuildScheduledEventEntityType, GuildScheduledEventPrivacyLevel,
+  InteractionContextType, InteractionType, MessageFlags, PermissionFlagsBits,
 } from 'discord.js';
+import type { Client } from 'discord.js';
 import type { DiscordPermission, InteractionContext } from '../features/registry.ts';
 
 /**
@@ -385,6 +386,30 @@ export function toGuild(raw: unknown): Guild {
   };
 }
 
+/**
+ * Interest a person left on one of the server's scheduled events, as the
+ * gateway reports it. The signal names the scheduled event rather than the VIA
+ * event, and Event_Mirrors is what turns one into the other.
+ */
+export interface ScheduledEventInterest {
+  /** Null when the library named no server, which nothing acts on. */
+  guildId: string | null;
+  scheduledEventId: string;
+  discordUserId: string;
+}
+
+/** Turn the scheduled event and the person the gateway names into the three identifiers. */
+export function toScheduledEventInterest(rawEvent: unknown, rawUser: unknown): ScheduledEventInterest {
+  const event = rawEvent as { id?: string; guildId?: string | null; guild?: { id?: string } | null };
+  const user = rawUser as { id?: string };
+  const guildId = event?.guildId ?? event?.guild?.id ?? null;
+  return {
+    guildId: guildId ? String(guildId) : null,
+    scheduledEventId: String(event?.id ?? ''),
+    discordUserId: String(user?.id ?? ''),
+  };
+}
+
 /** Turn the plain components of a reply into the rows the library sends. */
 export function toComponents(reply: Reply): unknown[] {
   return (reply.components ?? []).map(row => ({
@@ -546,4 +571,184 @@ export async function answerAutocomplete(raw: unknown, choices: AutocompleteChoi
   } catch (err) {
     console.error('answering an autocomplete failed:', (err as Error).message);
   }
+}
+
+/**
+ * The actions the bot takes on its own.
+ *
+ * Everything proactive reaches Discord through this wrapper: an announcement
+ * posted into a channel, an edit of it when the event changes, a notice that
+ * replies to it, a pin, and the server's own scheduled events. It sits here
+ * with the rest of the adapter because it is the same seam, and because it is
+ * the only other place that has to know what discord.js calls things.
+ *
+ * It is thin deliberately. It builds no content and decides nothing: it takes
+ * a Reply, which every renderer already produces, and turns it into the call
+ * the library wants. That is what lets the announcement handlers and the
+ * scheduled event mirror be tested against an object that records what it was
+ * asked to do, with no gateway anywhere.
+ *
+ * Nothing here catches a failure. A post that fails is an outbox entry that
+ * has not been handled, and the consumer decides what to do about it.
+ */
+
+/**
+ * A Discord scheduled event as the bot creates them. Every VIA event is of
+ * the external kind, because it happens somewhere Discord has no channel for,
+ * and the external kind carries the place as a line of text and requires an
+ * end time, which VIA always has.
+ */
+export interface ScheduledEventDraft {
+  name: string;
+  description?: string;
+  /** A time carrying the campus offset, as the web platform sends them. */
+  startTime: string;
+  endTime: string;
+  /** Where the event is, in the words the card shows. */
+  location: string;
+}
+
+/** Where a message goes and what it answers, when it answers something. */
+export interface PostOptions {
+  /** The message this one replies to, which is how a notice sits under its announcement. */
+  replyToMessageId?: string;
+}
+
+export interface DiscordActions {
+  /** Post a message and answer with the identifier it left behind. */
+  postMessage(channelId: string, reply: Reply, options?: PostOptions): Promise<string>;
+  editMessage(channelId: string, messageId: string, reply: Reply): Promise<void>;
+  pinMessage(channelId: string, messageId: string): Promise<void>;
+  unpinMessage(channelId: string, messageId: string): Promise<void>;
+  createScheduledEvent(guildId: string, draft: ScheduledEventDraft): Promise<string>;
+  editScheduledEvent(guildId: string, scheduledEventId: string, draft: ScheduledEventDraft): Promise<void>;
+  deleteScheduledEvent(guildId: string, scheduledEventId: string): Promise<void>;
+  /** Which permissions the bot itself holds in a server, named as the registry names them. */
+  permissionsIn(guildId: string): Promise<DiscordPermission[]>;
+}
+
+/**
+ * Discord's codes for a channel that is gone and for permissions the bot does
+ * not have. All three mean the same thing to a proactive feature: the place it
+ * was told to post in is no longer a place it can post in, which is the
+ * server's to fix and the manager's to be told about.
+ */
+const MISSING_ACCESS_CODES = new Set([10003, 50001, 50013]);
+
+export function isMissingAccess(err: unknown): boolean {
+  const code = (err as { code?: number } | null)?.code;
+  return typeof code === 'number' && MISSING_ACCESS_CODES.has(code);
+}
+
+/** Discord's code for a message that is no longer there, such as one somebody deleted. */
+const UNKNOWN_MESSAGE = 10008;
+
+/**
+ * Whether the message a call named is gone. An announcement somebody deleted
+ * is nothing to keep current, and nothing for anybody to put right, so it is
+ * told apart from a channel the bot can no longer reach.
+ */
+export function isMissingMessage(err: unknown): boolean {
+  return (err as { code?: number } | null)?.code === UNKNOWN_MESSAGE;
+}
+
+interface Postable {
+  send: (payload: Record<string, unknown>) => Promise<{ id: string }>;
+  messages: { fetch: (messageId: string) => Promise<PostedMessage> };
+}
+
+interface PostedMessage {
+  id: string;
+  edit: (payload: Record<string, unknown>) => Promise<unknown>;
+  pin: () => Promise<unknown>;
+  unpin: () => Promise<unknown>;
+}
+
+export function createDiscordActions(client: Client): DiscordActions {
+  async function channel(channelId: string): Promise<Postable> {
+    const found = await client.channels.fetch(channelId);
+    if (!found) throw new Error(`Discord has no channel with the identifier ${channelId}.`);
+    return found as unknown as Postable;
+  }
+
+  async function message(channelId: string, messageId: string): Promise<PostedMessage> {
+    return (await channel(channelId)).messages.fetch(messageId);
+  }
+
+  async function guild(guildId: string) {
+    const found = await client.guilds.fetch(guildId);
+    if (!found) throw new Error(`Discord has no server with the identifier ${guildId}.`);
+    return found as unknown as {
+      members: { me: { permissions: unknown } | null };
+      scheduledEvents: {
+        create: (payload: Record<string, unknown>) => Promise<{ id: string }>;
+        edit: (id: string, payload: Record<string, unknown>) => Promise<unknown>;
+        delete: (id: string) => Promise<unknown>;
+      };
+    };
+  }
+
+  /** What a scheduled event is, in the words the library takes. */
+  function scheduledEventPayload(draft: ScheduledEventDraft): Record<string, unknown> {
+    return {
+      name: draft.name,
+      ...(draft.description ? { description: draft.description } : {}),
+      scheduledStartTime: draft.startTime,
+      scheduledEndTime: draft.endTime,
+      privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+      entityType: GuildScheduledEventEntityType.External,
+      entityMetadata: { location: draft.location },
+    };
+  }
+
+  return {
+    async postMessage(channelId, reply, options = {}) {
+      const payload: Record<string, unknown> = {
+        content: reply.content,
+        components: toComponents(reply),
+      };
+      const files = toFiles(reply);
+      if (files.length > 0) payload.files = files;
+      if (options.replyToMessageId) {
+        // A notice that replies to an announcement somebody deleted is still
+        // worth posting, so the reply does not fail with the reference.
+        payload.reply = { messageReference: options.replyToMessageId, failIfNotExists: false };
+      }
+      const posted = await (await channel(channelId)).send(payload);
+      return String(posted.id);
+    },
+
+    async editMessage(channelId, messageId, reply) {
+      await (await message(channelId, messageId)).edit({
+        content: reply.content,
+        components: toComponents(reply),
+      });
+    },
+
+    async pinMessage(channelId, messageId) {
+      await (await message(channelId, messageId)).pin();
+    },
+
+    async unpinMessage(channelId, messageId) {
+      await (await message(channelId, messageId)).unpin();
+    },
+
+    async createScheduledEvent(guildId, draft) {
+      const created = await (await guild(guildId)).scheduledEvents.create(scheduledEventPayload(draft));
+      return String(created.id);
+    },
+
+    async editScheduledEvent(guildId, scheduledEventId, draft) {
+      await (await guild(guildId)).scheduledEvents.edit(scheduledEventId, scheduledEventPayload(draft));
+    },
+
+    async deleteScheduledEvent(guildId, scheduledEventId) {
+      await (await guild(guildId)).scheduledEvents.delete(scheduledEventId);
+    },
+
+    async permissionsIn(guildId) {
+      const me = (await guild(guildId)).members.me;
+      return me ? readPermissions(me.permissions) : [];
+    },
+  };
 }

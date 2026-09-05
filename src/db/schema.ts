@@ -129,7 +129,9 @@ export const eventMirrors = mysqlTable('Event_Mirrors', {
  * purpose is what makes delivery exactly once under any single failure: a
  * crash between the write and the post is retried, and a crash after the post
  * is not. The target names where the post goes, as `channel:` or `user:`
- * followed by the snowflake. Rows are pruned after ninety days.
+ * followed by the snowflake, or `guild:` for something that concerns a whole
+ * server, such as the notice its manager is sent when a feature had to be
+ * switched off. Rows are pruned after ninety days.
  */
 export const deliveries = mysqlTable('Deliveries', {
   deliveryId: int('delivery_id').autoincrement().notNull(),

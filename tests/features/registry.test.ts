@@ -6,12 +6,15 @@ import { findViolations } from '../../scripts/check-language.js';
 import { features, featureById, CHANNEL_PURPOSES } from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the identity, reading and setup features the first two increments have', () => {
+  it('registers the identity, reading, setup and proactive features the first two increments have', () => {
     expect(features.map(f => f.id).sort()).toEqual([
+      'announce.changes',
+      'announce.new',
       'events.detail',
       'events.list',
       'identity.link',
       'identity.unlink',
+      'mirror.scheduled',
       'rsos.detail',
       'setup.configure',
       'setup.remove',
@@ -49,12 +52,43 @@ describe('the feature registry', () => {
     }
   });
 
-  it('names a channel purpose on every proactive feature', () => {
-    for (const feature of features.filter(f => f.category === 'proactive')) {
+  it('names a channel purpose on every proactive feature that posts in a channel', () => {
+    // The scheduled event mirror is the one proactive feature that posts
+    // nowhere in the server's channels: it writes into the server's own
+    // Events tab, which is not a channel a manager can bind.
+    for (const feature of features.filter(f => f.category === 'proactive' && f.id !== 'mirror.scheduled')) {
       expect(feature.channelPurposes.length).toBeGreaterThan(0);
       for (const purpose of feature.channelPurposes) {
         expect(CHANNEL_PURPOSES).toContain(purpose);
       }
+    }
+  });
+
+  it('posts announcements in the announcements channel and needs the two permissions that takes', () => {
+    for (const id of ['announce.new', 'announce.changes']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('proactive');
+      expect([...feature.channelPurposes]).toEqual(['announcements']);
+      expect([...feature.requiredPermissions].sort()).toEqual(['SendMessages', 'ViewChannel']);
+      expect([...feature.contexts]).toEqual(['guild']);
+      expect(feature.command).toBeUndefined();
+    }
+  });
+
+  it('mirrors scheduled events into the Events tab, which needs the Manage Events permission', () => {
+    const feature = featureById('mirror.scheduled');
+    expect(feature.category).toBe('proactive');
+    expect([...feature.channelPurposes]).toEqual([]);
+    expect([...feature.requiredPermissions]).toEqual(['ManageEvents']);
+    expect([...feature.contexts]).toEqual(['guild']);
+  });
+
+  it('leaves every proactive feature off until a server switches it on', () => {
+    // Section 2 of the design: nothing proactive happens in a server until
+    // that server has set it up and asked for it.
+    for (const feature of features.filter(f => f.category === 'proactive')) {
+      expect(feature.defaultEnabled).toBe(false);
+      expect(feature.tier).toBe('manager');
     }
   });
 

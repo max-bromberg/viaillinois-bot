@@ -334,10 +334,10 @@ describe('binding a server to one organization', () => {
 
 describe('a feature that cannot work', () => {
   /**
-   * Nothing in the registry needs a permission or a channel yet, because the
-   * proactive features arrive with the announcements. The rule is written and
-   * tested against a feature shaped like the ones that are coming, so that the
-   * first announcement feature to be added is already covered by it.
+   * The rule is tested against a feature written here rather than against one
+   * from the registry, so that the shape of the rule stays readable in one
+   * place even as the registry grows. The registry's own proactive features
+   * are covered by the last test in this group.
    */
   const proactive: Feature = {
     ...featureById('events.list'),
@@ -365,8 +365,17 @@ describe('a feature that cannot work', () => {
   });
 
   it('never blocks a feature that neither posts nor needs a permission', () => {
-    for (const feature of features) {
+    const undemanding = features.filter(feature =>
+      feature.channelPurposes.length === 0 && feature.requiredPermissions.length === 0);
+    expect(undemanding.length).toBeGreaterThan(0);
+    for (const feature of undemanding) {
       expect(blockedReason(feature, { channels: {}, permissions: [] })).toBeNull();
+    }
+  });
+
+  it('blocks every proactive feature in the registry in a server that bound nothing and granted nothing', () => {
+    for (const feature of features.filter(f => f.category === 'proactive')) {
+      expect(blockedReason(feature, { channels: {}, permissions: [] })).not.toBeNull();
     }
   });
 
@@ -445,6 +454,15 @@ describe('removing the bot from a server', () => {
     expect(reply.content).toContain('nothing');
   });
 
+  it('says so plainly when the hook cleared nothing either, which is the deployed case', async () => {
+    const { context } = testContext();
+    const reply = await removeCommand.run(manager({ commandName: 'via remove' }), {
+      ...context,
+      removeGuildPresence: async () => ({ scheduledEvents: 0, unpinnedMessages: 0 }),
+    });
+    expect(reply.content).toContain('nothing');
+  });
+
   it('refuses somebody without the Manage Server permission', async () => {
     const { context, guilds } = testContext();
     await guilds.createInstallation(GUILD, ROSA);
@@ -457,10 +475,10 @@ describe('removing the bot from a server', () => {
   });
 
   /**
-   * Deleting the scheduled events the bot created and unpinning the message it
-   * pinned belong to the half of this increment that creates them. The hook is
-   * here so that adding them is one wiring change rather than a rewrite, and
-   * the removal says what it did rather than promising what it did not.
+   * What the bot posted into the server goes before the rows that say where it
+   * is, because those rows are what says where to look. The scheduled events
+   * are deleted by the scheduled event mirror, which is what the entry point
+   * gives this hook, and the removal says what it actually did.
    */
   it('calls the hook that clears what the bot posted, when there is one', async () => {
     const cleared: string[] = [];

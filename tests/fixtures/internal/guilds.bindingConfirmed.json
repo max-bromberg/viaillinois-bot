@@ -1,3 +1,7 @@
 {
-  "ok": true
+  "ok": true,
+  "rso": {
+    "rso_id": 4,
+    "name": "IEEE Student Branch"
+  }
 }

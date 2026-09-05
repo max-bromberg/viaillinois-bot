@@ -18,8 +18,11 @@ import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.
  * so gently and offers the link command, because a button that fails silently
  * teaches people that the bot is broken.
  *
- * Reminders, interest and following arrive in the third increment. Until they
- * do, their buttons say so in one sentence rather than pretending to work.
+ * Interest is recorded on VIA the moment the button is pressed, because it is
+ * what replaced the RSVPs the web platform removed and the count on the card
+ * is the number a board reads. Reminders and following arrive in the third
+ * increment, and until they do their buttons say so in one sentence rather
+ * than pretending to work.
  */
 
 const listFeature = featureById('events.list');
@@ -55,6 +58,14 @@ export const LINK_NEEDED_MESSAGE =
 
 export const NOT_READY_MESSAGE =
   'That part of the bot is not ready yet, and it arrives in the next release. Nothing has been saved.';
+
+/** What somebody reads once their interest has been recorded on VIA. */
+export function interestedMessage(title: string, interestCount: number): string {
+  const others = interestCount === 1
+    ? 'You are the first person to say so.'
+    : `${interestCount} people are interested so far.`;
+  return `You are marked as interested in ${title}. ${others}`;
+}
 
 /** The button that sends somebody who is not linked to the link command. */
 const LINK_BUTTON: Reply['components'] = [{
@@ -350,7 +361,31 @@ export const eventComponent: ComponentHandler = {
       };
     }
 
-    if (customId === EVENT_BUTTON.remind(eventId) || customId === EVENT_BUTTON.interested(eventId)) {
+    if (customId === EVENT_BUTTON.interested(eventId)) {
+      const needsLink = await requireLink(interaction, context);
+      if (needsLink) return needsLink;
+
+      let event;
+      let answer;
+      try {
+        event = await context.via.getEvent(eventId, interaction.userId);
+        if (!event) return { content: EVENT_GONE_MESSAGE };
+        // The web platform records the interest against the NetID the acting
+        // header names, and answers with the count after it, which is what
+        // the person who pressed the button wants to know.
+        answer = await context.via.setInterest(eventId, {
+          interested: true,
+          actingDiscordUserId: interaction.userId,
+        });
+      } catch (err) {
+        if (err instanceof ViaError && err.code === 'not_found') return { content: EVENT_GONE_MESSAGE };
+        return answerFor(err);
+      }
+
+      return { content: interestedMessage(event.title, answer.interestCount) };
+    }
+
+    if (customId === EVENT_BUTTON.remind(eventId)) {
       const needsLink = await requireLink(interaction, context);
       if (needsLink) return needsLink;
       return { content: NOT_READY_MESSAGE };

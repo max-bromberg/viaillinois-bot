@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  ApplicationCommandOptionType, ChannelType, ComponentType, InteractionContextType, InteractionType,
+  ApplicationCommandOptionType, ChannelType, ComponentType, GuildScheduledEventEntityType,
+  GuildScheduledEventPrivacyLevel, InteractionContextType, InteractionType,
   MessageFlags, PermissionFlagsBits,
 } from 'discord.js';
 import {
   toInteraction, toComponents, toFiles, applyReply, applyUpdate, respond, respondByUpdate,
-  answerAutocomplete, hasPermission,
+  answerAutocomplete, hasPermission, createDiscordActions, isMissingAccess,
+  toScheduledEventInterest,
 } from '../../src/discord/adapter.ts';
 import type { Reply } from '../../src/discord/adapter.ts';
 
@@ -491,5 +493,200 @@ describe('answering an autocomplete', () => {
   it('says nothing rather than throwing when Discord has already closed the interaction', async () => {
     const raw = { respond: vi.fn(async () => { throw new Error('Unknown interaction'); }) };
     await expect(answerAutocomplete(raw as never, [{ name: 'IEEE', value: '1' }])).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The actions the bot takes on its own, rather than in answer to somebody.
+ *
+ * Everything proactive the bot does reaches Discord through this wrapper:
+ * posting an announcement, editing it when the event changes, pinning a
+ * message, and creating, editing and deleting the server's own scheduled
+ * events. It is thin on purpose. What it is for is that every module above it
+ * can be tested by handing it an object that records what it was asked to do,
+ * which is exactly what these tests do to the wrapper itself.
+ */
+describe('the actions the bot takes on its own', () => {
+  const CHANNEL = '700000000000000001';
+  const GUILD = '900000000000000001';
+
+  function fakeClient() {
+    const sent: Array<Record<string, unknown>> = [];
+    const edited: Array<Record<string, unknown>> = [];
+    const pinned: string[] = [];
+    const unpinned: string[] = [];
+    const scheduled: Array<Record<string, unknown>> = [];
+    const message = {
+      id: '800000000000000001',
+      edit: async (payload: Record<string, unknown>) => { edited.push(payload); },
+      pin: async () => { pinned.push('800000000000000001'); },
+      unpin: async () => { unpinned.push('800000000000000001'); },
+    };
+    const client = {
+      channels: {
+        fetch: async (channelId: string) => {
+          if (channelId !== CHANNEL) throw new Error('Unknown Channel');
+          return {
+            isTextBased: () => true,
+            send: async (payload: Record<string, unknown>) => { sent.push(payload); return message; },
+            messages: { fetch: async () => message },
+          };
+        },
+      },
+      guilds: {
+        fetch: async (guildId: string) => {
+          if (guildId !== GUILD) throw new Error('Unknown Guild');
+          return {
+            members: { me: { permissions: { bitfield: PermissionFlagsBits.ManageEvents } } },
+            scheduledEvents: {
+              create: async (payload: Record<string, unknown>) => {
+                scheduled.push({ action: 'create', ...payload });
+                return { id: '600000000000000001' };
+              },
+              edit: async (id: string, payload: Record<string, unknown>) => {
+                scheduled.push({ action: 'edit', id, ...payload });
+              },
+              delete: async (id: string) => { scheduled.push({ action: 'delete', id }); },
+            },
+          };
+        },
+      },
+    };
+    return { client, sent, edited, pinned, unpinned, scheduled };
+  }
+
+  it('posts a message with the content and the components of the answer', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    const messageId = await actions.postMessage(CHANNEL, {
+      content: 'IEEE has a new event.',
+      components: [{
+        kind: 'row',
+        components: [{ kind: 'button', style: 'primary', label: 'Interested', customId: 'event:interested:10' }],
+      }],
+    });
+
+    expect(messageId).toBe('800000000000000001');
+    expect(fake.sent[0]!.content).toBe('IEEE has a new event.');
+    expect(JSON.stringify(fake.sent[0]!.components)).toContain('event:interested:10');
+  });
+
+  it('posts a notice as a reply to the announcement it is about', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    await actions.postMessage(CHANNEL, { content: 'This event has moved.' }, {
+      replyToMessageId: '800000000000000001',
+    });
+    expect(fake.sent[0]!.reply).toEqual({
+      messageReference: '800000000000000001',
+      failIfNotExists: false,
+    });
+  });
+
+  it('edits a message in place, which is how an announcement stays current', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    await actions.editMessage(CHANNEL, '800000000000000001', { content: 'The room has changed.' });
+    expect(fake.edited[0]!.content).toBe('The room has changed.');
+  });
+
+  it('pins and unpins a message', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    await actions.pinMessage(CHANNEL, '800000000000000001');
+    await actions.unpinMessage(CHANNEL, '800000000000000001');
+    expect(fake.pinned).toEqual(['800000000000000001']);
+    expect(fake.unpinned).toEqual(['800000000000000001']);
+  });
+
+  /**
+   * A VIA event is somewhere Discord does not know about, so it is mirrored as
+   * a scheduled event of the external kind, whose place is a line of text.
+   * Discord requires an end time for that kind, which VIA always has.
+   */
+  it('creates a scheduled event of the external kind, with the place and the times', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    const id = await actions.createScheduledEvent(GUILD, {
+      name: 'General meeting',
+      description: 'Bring a laptop.',
+      startTime: '2026-09-10T18:00:00-05:00',
+      endTime: '2026-09-10T19:00:00-05:00',
+      location: 'Electrical & Computer Eng Bldg 1002',
+    });
+
+    expect(id).toBe('600000000000000001');
+    const created = fake.scheduled[0]!;
+    expect(created.action).toBe('create');
+    expect(created.name).toBe('General meeting');
+    expect(created.entityType).toBe(GuildScheduledEventEntityType.External);
+    expect(created.privacyLevel).toBe(GuildScheduledEventPrivacyLevel.GuildOnly);
+    expect(created.entityMetadata).toEqual({ location: 'Electrical & Computer Eng Bldg 1002' });
+    expect(created.scheduledStartTime).toBe('2026-09-10T18:00:00-05:00');
+    expect(created.scheduledEndTime).toBe('2026-09-10T19:00:00-05:00');
+  });
+
+  it('edits and deletes a scheduled event by the identifier it was given', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    await actions.editScheduledEvent(GUILD, '600000000000000001', {
+      name: 'General meeting',
+      startTime: '2026-09-10T19:00:00-05:00',
+      endTime: '2026-09-10T20:00:00-05:00',
+      location: 'Everitt Laboratory 151',
+    });
+    await actions.deleteScheduledEvent(GUILD, '600000000000000001');
+
+    expect(fake.scheduled[0]).toMatchObject({ action: 'edit', id: '600000000000000001' });
+    expect(fake.scheduled[1]).toEqual({ action: 'delete', id: '600000000000000001' });
+  });
+
+  it('says which permissions the bot itself holds in a server, by name', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    expect(await actions.permissionsIn(GUILD)).toEqual(['ManageEvents']);
+  });
+
+  it('tells a channel that is gone apart from any other failure', async () => {
+    expect(isMissingAccess({ code: 10003 })).toBe(true);
+    expect(isMissingAccess({ code: 50001 })).toBe(true);
+    expect(isMissingAccess({ code: 50013 })).toBe(true);
+    expect(isMissingAccess(new Error('Discord did not answer'))).toBe(false);
+  });
+});
+
+/**
+ * Interest left on a scheduled event.
+ *
+ * Discord tells the bot who marked themselves interested in one of the
+ * server's scheduled events, and the bot records that on VIA against the event
+ * the scheduled event mirrors. The gateway hands over the scheduled event and
+ * the person, and this turns the pair into the three identifiers that answer
+ * which event, in which server, and who.
+ */
+describe('an interest signal from the Events tab', () => {
+  it('reads the server, the scheduled event and the person', () => {
+    const signal = toScheduledEventInterest(
+      { id: '600000000000000001', guildId: '900000000000000001' },
+      { id: '204255221017214977' },
+    );
+    expect(signal).toEqual({
+      guildId: '900000000000000001',
+      scheduledEventId: '600000000000000001',
+      discordUserId: '204255221017214977',
+    });
+  });
+
+  it('reads the server from the guild the library attached when it named no identifier', () => {
+    const signal = toScheduledEventInterest(
+      { id: '600000000000000001', guild: { id: '900000000000000001' } },
+      { id: '204255221017214977' },
+    );
+    expect(signal.guildId).toBe('900000000000000001');
+  });
+
+  it('answers with no server rather than a made up one when the library named none', () => {
+    const signal = toScheduledEventInterest({ id: '600000000000000001' }, { id: '204255221017214977' });
+    expect(signal.guildId).toBe(null);
   });
 });

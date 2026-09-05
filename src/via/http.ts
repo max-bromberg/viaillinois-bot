@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, eventQueryParams,
-  parseEvent, parseEventPage, parseLinkSession, parseLinkedAccount, parseRsoWithEvents, parseRsos,
-  type ViaClient, type ViaErrorCode, type EventPage, type EventQuery, type LinkSession,
-  type LinkedAccount, type Rso, type RsoWithEvents, type ViaEvent,
+  ViaError, ViaBusyError, eventQueryParams, interestBody,
+  parseEvent, parseEventPage, parseInterestAnswer, parseLinkSession, parseLinkedAccount,
+  parseOutboxPage, parseRsoWithEvents, parseRsos,
+  type ViaClient, type ViaErrorCode, type EventPage, type EventQuery, type InterestAnswer,
+  type InterestSignal, type LinkSession, type LinkedAccount, type OutboxPage, type OutboxQuery,
+  type Rso, type RsoWithEvents, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -303,6 +305,36 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
         body: { rso_id: rsoId },
         actingDiscordUserId,
       });
+    },
+
+    /**
+     * The outbox is the web platform speaking to the bot rather than to a
+     * person, so it carries no acting header. The cursor is the bot's own, and
+     * the web platform keeps nothing about what has been read.
+     */
+    async readOutbox(query: OutboxQuery): Promise<OutboxPage> {
+      const params = new URLSearchParams({ after: String(query.after) });
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      return parseOutboxPage(await request<unknown>({
+        method: 'GET',
+        path: `/outbox?${params.toString()}`,
+      }));
+    },
+
+    /**
+     * Interest is what replaces the RSVPs the web platform removed. A linked
+     * person is named by the acting header and recorded by NetID, and anybody
+     * else is named by their Discord identifier, which the web platform
+     * records as a salted hash so that the count is honest and nobody can
+     * reverse it.
+     */
+    async setInterest(eventId: number, interest: InterestSignal): Promise<InterestAnswer> {
+      return parseInterestAnswer(await request<unknown>({
+        method: 'PUT',
+        path: `/events/${encodeURIComponent(String(eventId))}/interest`,
+        body: interestBody(interest),
+        actingDiscordUserId: interest.actingDiscordUserId,
+      }));
     },
 
     /**

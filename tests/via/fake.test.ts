@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createFakeViaClient } from '../../src/via/fake.ts';
-import { ViaError } from '../../src/via/client.ts';
+import { ViaError, outboxEvent, outboxSeries } from '../../src/via/client.ts';
 
 describe('the fake web platform client', () => {
   it('opens a link session on the address shape the recorded answer carries', async () => {
@@ -226,5 +226,127 @@ describe('confirming a binding through the fake', () => {
     const via = createFakeViaClient();
     const failure = await via.confirmBinding(1, '204255221017214977').then(() => null, (err: unknown) => err);
     expect((failure as ViaError).code).toBe('not_linked');
+  });
+});
+
+describe('the outbox through the fake', () => {
+  it('has nothing to read until a test seeds an entry', async () => {
+    const via = createFakeViaClient();
+    const page = await via.readOutbox({ after: 0 });
+    expect(page.entries).toEqual([]);
+    expect(page.nextAfter).toBe(null);
+  });
+
+  it('seeds an entry from the recorded entry of that kind, so the shape is the web platform shape', async () => {
+    const via = createFakeViaClient();
+    via.seedOutbox('event.created');
+    const [entry] = (await via.readOutbox({ after: 0 })).entries;
+    expect(entry!.kind).toBe('event.created');
+    expect(entry!.subjectType).toBe('event');
+    expect(entry!.rsoId).toBe(1);
+    expect(outboxEvent(entry!)!.title).toBe('General meeting');
+  });
+
+  it('numbers seeded entries in the order they were seeded', async () => {
+    const via = createFakeViaClient();
+    via.seedOutbox('event.created');
+    via.seedOutbox('event.updated');
+    via.seedOutbox('series.created');
+    const page = await via.readOutbox({ after: 0 });
+    expect(page.entries.map(entry => entry.outboxId)).toEqual([1, 2, 3]);
+    expect(page.entries.map(entry => entry.kind))
+      .toEqual(['event.created', 'event.updated', 'series.created']);
+    expect(page.nextAfter).toBe(3);
+  });
+
+  it('answers only with the entries after the cursor it was given', async () => {
+    const via = createFakeViaClient();
+    via.seedOutbox('event.created');
+    via.seedOutbox('event.updated');
+    const page = await via.readOutbox({ after: 1 });
+    expect(page.entries.map(entry => entry.outboxId)).toEqual([2]);
+  });
+
+  it('answers with at most the number of entries it was asked for', async () => {
+    const via = createFakeViaClient();
+    via.seedOutbox('event.created');
+    via.seedOutbox('event.updated');
+    via.seedOutbox('event.cancelled');
+    const page = await via.readOutbox({ after: 0, limit: 2 });
+    expect(page.entries.map(entry => entry.outboxId)).toEqual([1, 2]);
+    expect(page.nextAfter).toBe(2);
+  });
+
+  it('lets a test say what an entry is about, so one event is not every event', async () => {
+    const via = createFakeViaClient();
+    const event = via.seedEvent({ eventId: 44, title: 'Soldering night', rsoId: 9 });
+    via.seedOutbox('event.created', { rsoId: 9, subjectId: '44', payload: { event } });
+    const [entry] = (await via.readOutbox({ after: 0 })).entries;
+    expect(entry!.rsoId).toBe(9);
+    expect(outboxEvent(entry!)!.title).toBe('Soldering night');
+  });
+
+  it('seeds a series entry with the events it holds', async () => {
+    const via = createFakeViaClient();
+    via.seedOutbox('series.created');
+    const [entry] = (await via.readOutbox({ after: 0 })).entries;
+    const change = outboxSeries(entry!)!;
+    expect(change.series.seriesId).toBe(4);
+    expect(change.series.endsOn).toBe('2026-12-09');
+    expect(change.eventIds).toEqual([10, 11, 12]);
+  });
+
+  it('refuses to seed a kind the web platform does not write', () => {
+    const via = createFakeViaClient();
+    expect(() => via.seedOutbox('event.exploded')).toThrow('event.exploded');
+  });
+});
+
+describe('interest through the fake', () => {
+  it('counts a person who marks interest, and says how many are interested', async () => {
+    const via = createFakeViaClient();
+    const event = via.seedEvent({ eventId: 10, interestCount: 3 });
+    const answer = await via.setInterest(event.eventId, {
+      interested: true,
+      actingDiscordUserId: '204255221017214977',
+    });
+    expect(answer.ok).toBe(true);
+    expect(answer.interestCount).toBe(4);
+    expect((await via.getEvent(10))!.interestCount).toBe(4);
+  });
+
+  it('counts one person once, however many times they press the button', async () => {
+    const via = createFakeViaClient();
+    via.seedEvent({ eventId: 10, interestCount: 3 });
+    await via.setInterest(10, { interested: true, actingDiscordUserId: '204255221017214977' });
+    const answer = await via.setInterest(10, { interested: true, actingDiscordUserId: '204255221017214977' });
+    expect(answer.interestCount).toBe(4);
+  });
+
+  it('takes the count back down when a person clears their interest', async () => {
+    const via = createFakeViaClient();
+    via.seedEvent({ eventId: 10, interestCount: 3 });
+    await via.setInterest(10, { interested: true, discordUserId: '301422551071492041' });
+    const answer = await via.setInterest(10, { interested: false, discordUserId: '301422551071492041' });
+    expect(answer.interestCount).toBe(3);
+  });
+
+  it('records who the signal came from, so the acting header can be tested', async () => {
+    const via = createFakeViaClient();
+    via.seedEvent({ eventId: 10 });
+    await via.setInterest(10, { interested: true, actingDiscordUserId: '204255221017214977' });
+    await via.setInterest(10, { interested: false, discordUserId: '301422551071492041' });
+    expect(via.interests).toEqual([
+      { eventId: 10, interested: true, actingDiscordUserId: '204255221017214977' },
+      { eventId: 10, interested: false, discordUserId: '301422551071492041' },
+    ]);
+  });
+
+  it('refuses interest in an event nothing seeded', async () => {
+    const via = createFakeViaClient();
+    via.clearEvents();
+    const failure = await via.setInterest(10, { interested: true, discordUserId: '1' })
+      .then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('not_found');
   });
 });

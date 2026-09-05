@@ -207,6 +207,41 @@ export const features: readonly Feature[] = [
     },
   },
   {
+    id: 'announce.new',
+    description: 'Post an announcement in the announcements channel when an organization this server follows creates an event, or a series of meetings, on VIA.',
+    category: 'proactive',
+    // Nothing proactive happens in a server until that server asks for it, so
+    // every feature in this category is off until a manager switches it on.
+    defaultEnabled: false,
+    requiredPermissions: ['ViewChannel', 'SendMessages'],
+    channelPurposes: ['announcements'],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
+    id: 'announce.changes',
+    description: 'Keep an announcement current when the event it describes moves, changes room, is cancelled or is removed, and post a short notice beside it.',
+    category: 'proactive',
+    defaultEnabled: false,
+    requiredPermissions: ['ViewChannel', 'SendMessages'],
+    channelPurposes: ['announcements'],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
+    id: 'mirror.scheduled',
+    description: 'Mirror the events coming up into the server Events tab as Discord scheduled events, so that members can mark themselves interested with Discord own control and receive Discord own reminders.',
+    category: 'proactive',
+    defaultEnabled: false,
+    // The Events tab is not a channel, so this feature binds no channel
+    // purpose. What it does need is the permission to create and edit the
+    // server's own scheduled events.
+    requiredPermissions: ['ManageEvents'],
+    channelPurposes: [],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
     id: 'setup.configure',
     description: 'Set the bot up in this server and change any answer later: what kind of server this is, the organizations it follows, the channels the bot posts in, and which features are on.',
     category: 'administration',

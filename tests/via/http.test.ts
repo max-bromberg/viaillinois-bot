@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createViaHttpClient, INTERNAL_PREFIX } from '../../src/via/http.ts';
-import { ViaError, ViaBusyError } from '../../src/via/client.ts';
+import {
+  ViaError, ViaBusyError, outboxChangedFields, outboxEvent,
+} from '../../src/via/client.ts';
 
 const fixture = (name: string) =>
   readFileSync(new URL(`../fixtures/internal/${name}`, import.meta.url), 'utf8');
@@ -367,5 +369,95 @@ describe('confirming that a server may be bound to an organization', () => {
     const { via } = client([json(403, fixture('error.not_linked.json'))]);
     const failure = await via.confirmBinding(4, '204255221017214977').then(() => null, (err: unknown) => err);
     expect((failure as ViaError).code).toBe('not_linked');
+  });
+});
+
+describe('reading the outbox', () => {
+  it('asks for the entries after the cursor it holds, in the order they were written', async () => {
+    const { via, calls } = client([json(200, fixture('outbox.json'))]);
+    const page = await via.readOutbox({ after: 0, limit: 50 });
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/outbox?after=0&limit=50`);
+    expect(calls[0]!.method).toBe('GET');
+    expect(page.entries.map(entry => entry.outboxId)).toEqual([1, 2]);
+    expect(page.nextAfter).toBe(2);
+  });
+
+  it('carries the service token and no acting person, because the outbox is nobody in particular', async () => {
+    const { via, calls } = client([json(200, fixture('outbox.json'))]);
+    await via.readOutbox({ after: 7 });
+    expect(calls[0]!.headers.authorization).toBe('Bearer service-token');
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBeUndefined();
+  });
+
+  it('reads the kind, the subject and the organization an entry names', async () => {
+    const { via } = client([json(200, fixture('outbox.json'))]);
+    const [first] = (await via.readOutbox({ after: 0 })).entries;
+    expect(first!.kind).toBe('event.created');
+    expect(first!.subjectType).toBe('event');
+    expect(first!.subjectId).toBe('10');
+    expect(first!.rsoId).toBe(1);
+    expect(first!.createdAt).toBe('2026-09-05T12:00:00-05:00');
+  });
+
+  it('reads the event an entry carries through the same parser the reading endpoints use', async () => {
+    const { via } = client([json(200, fixture('outbox.json'))]);
+    const [first] = (await via.readOutbox({ after: 0 })).entries;
+    const event = outboxEvent(first!);
+    expect(event!.eventId).toBe(10);
+    expect(event!.title).toBe('General meeting');
+    expect(event!.rsoName).toBe('IEEE');
+    expect(event!.startTime).toBe('2026-09-10T18:00:00-05:00');
+    expect(event!.seriesId).toBe(4);
+  });
+
+  it('reads the fields an update says changed', async () => {
+    const { via } = client([json(200, fixture('outbox.json'))]);
+    const [, second] = (await via.readOutbox({ after: 0 })).entries;
+    expect(outboxChangedFields(second!)).toEqual(['start_time', 'end_time']);
+  });
+
+  it('answers with no entries and no cursor when the outbox has nothing new', async () => {
+    const { via } = client([json(200, JSON.stringify({ entries: [], next_after: null }))]);
+    const page = await via.readOutbox({ after: 11 });
+    expect(page.entries).toEqual([]);
+    expect(page.nextAfter).toBe(null);
+  });
+});
+
+describe('recording interest in an event', () => {
+  it('sends the acting person for somebody who is linked, and no Discord identifier', async () => {
+    const { via, calls } = client([json(200, fixture('interest.json'))]);
+    const answer = await via.setInterest(10, { interested: true, actingDiscordUserId: '204255221017214977' });
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/10/interest`);
+    expect(calls[0]!.method).toBe('PUT');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ interested: true });
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe('204255221017214977');
+    expect(answer.ok).toBe(true);
+    expect(answer.interestCount).toBeGreaterThan(0);
+  });
+
+  /**
+   * Section 10 of the design: interest from somebody who is not linked is
+   * counted as a salted hash of their Discord identifier, and the salting is
+   * the web platform's. The bot sends the identifier and holds nothing.
+   */
+  it('sends the Discord identifier for somebody who is not linked, and acts as nobody', async () => {
+    const { via, calls } = client([json(200, fixture('interest.json'))]);
+    await via.setInterest(10, { interested: true, discordUserId: '301422551071492041' });
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ interested: true, discord_user_id: '301422551071492041' });
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBeUndefined();
+  });
+
+  it('clears interest with the same call, said the other way round', async () => {
+    const { via, calls } = client([json(200, fixture('interest.json'))]);
+    await via.setInterest(10, { interested: false, actingDiscordUserId: '204255221017214977' });
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ interested: false });
+  });
+
+  it('turns a refusal into the typed error its code names', async () => {
+    const { via } = client([json(404, fixture('refusal.json'))]);
+    const failure = await via.setInterest(10, { interested: true, discordUserId: '1' })
+      .then(() => null, (err: unknown) => err);
+    expect(failure).toBeInstanceOf(ViaError);
   });
 });

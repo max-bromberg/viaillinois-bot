@@ -9,9 +9,11 @@ platform's contract test, `server/tests/routes/internalContract.test.js`, and ar
 here unchanged; a change to one of them is a change the web platform made deliberately.
 The files in the first table are hand written from
 `docs/superpowers/specs/2026-09-04-via-internal-service-api.md`, sections 4 and 6,
-because the link endpoints and the binding confirmation do not exist on the web platform
-yet. When the contract test records them, the recorded files replace the hand written
-ones, and any difference between the two is a real disagreement to settle before the two
+because the link endpoints, the binding confirmation and the interest endpoint do not
+exist on the web platform yet. The interest endpoint is the web platform's seventh
+increment, and `interest.json` is written from the row for `PUT /events/{id}/interest` in
+section 6 of that specification. When the contract test records them, the recorded files
+replace the hand written ones, and any difference between the two is a real disagreement to settle before the two
 repositories ship together.
 
 Times carry the campus offset, as the public API sends them.
@@ -20,13 +22,11 @@ Times carry the campus offset, as the public API sends them.
 
 | File | The answer it records |
 |---|---|
-| `links.session.json` | `POST /links/sessions`, a new link session with its address and expiry |
-| `links.link.json` | `GET /links/{discordUserId}`, a resolved link |
-| `links.unlinked.json` | `GET /links/{discordUserId}` and `DELETE /links/{discordUserId}` when there is no link |
 | `error.not_linked.json` | The error shape with the `not_linked` code, answered with 403 |
 | `error.forbidden.json` | The error shape with the `forbidden` code, answered with 403 |
 | `error.busy.json` | The busy answer, sent with 503 and a Retry-After header |
 | `guilds.bindingConfirmed.json` | `POST /guilds/bindings/confirm`, the answer when the acting person may bind a server to that organization |
+| `interest.json` | `PUT /events/{id}/interest`, the answer to setting or clearing interest, with the count after the change |
 | `health.json` | `GET /health` on the web platform, which the bot's own health endpoint reports |
 
 ## Recorded by the web platform's contract test
@@ -45,5 +45,9 @@ Times carry the campus offset, as the public API sends them.
 | `locationsFree.json` | `GET /locations/free` |
 | `building.json` | `GET /buildings/{code}` |
 | `refusal.json` | The error shape itself, which every refusal uses |
+| `links.session.json` | `POST /links/sessions`, a new link session with its address and expiry |
+| `links.link.json` | `GET /links/{discordUserId}`, a resolved link; roles carry the platform's casing and the client lowers them |
+| `links.unlinked.json` | `GET /links/{discordUserId}` when there is no link |
+| `guilds.bindingConfirmed.json` | `POST /guilds/bindings/confirm`, recorded by the web platform as bindingsConfirm.json |
 | `outbox.json` | `GET /outbox`, a page of entries with the next cursor |
 | `outboxEntries.json` | One entry per outbox kind, as the web platform writes them |

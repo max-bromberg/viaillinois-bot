@@ -42,3 +42,31 @@ at the top that the bump script turns into the next release.
 - The reading endpoints and the binding confirmation on the web platform client, in all
   three of the interface, the HTTP implementation and the fake, and the hot read cache
   that holds the organization list and a listing for a minute.
+- Deliveries: one row per intended post, written before the post and keyed by the outbox
+  entry, the target and the purpose, so that a crash between the two is retried and a
+  crash after the post is not.
+- The outbox consumer: one loop polling the outbox from the cursor in Outbox_Cursor,
+  handling each entry in order through the handler for its kind, advancing the cursor only
+  once every delivery is recorded, and dropping the cached reads for the organization the
+  entry touched. An entry of a kind nothing handles is moved past, and an entry that keeps
+  failing is left behind loudly rather than stopping the queue behind it forever.
+- Announcements: the three proactive features in the registry, and the handlers for
+  event.created, series.created, event.updated, event.cancelled, event.deleted,
+  series.updated and series.deleted. A new event or a new series is announced in the
+  channel each following server bound, a series being announced once with its pattern and
+  its end date; a change edits that announcement in place and, for a move or a
+  cancellation, replies to it with a short notice; and a deletion leaves an announcement
+  saying that the event was removed.
+- Native scheduled events: each occurrence inside a server's mirroring window, a fortnight
+  by default, is mirrored into the server's Events tab, mapped in Event_Mirrors, kept in
+  step by the outbox handlers, and rolled forward by a daily job. Interest a member leaves
+  with Discord's own control is recorded on VIA, by NetID when the person is linked and by
+  their Discord identifier otherwise, which the web platform records as a salted hash.
+- The Interested button on the event card now records interest on VIA and answers with the
+  count.
+- A proactive feature whose channel or permission has gone is switched off in that server,
+  and the manager who set the bot up is told once, with the reason and what to do.
+- The remove command now deletes the scheduled events the bot created in the server before
+  it deletes the rows that say where they are.
+- The health endpoint reports how far through the outbox the consumer has read and when it
+  last looked, so the cutover can see that it is alive.

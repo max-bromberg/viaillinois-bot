@@ -33,6 +33,8 @@ function recordingStore() {
     async listChannels() { return {}; },
     async setFollowedRsos() {},
     async listFollowedRsos() { return []; },
+    async listGuildsFollowing() { return []; },
+    async listInstallations() { return []; },
     async removeGuild(guildId) {
       removed.push(guildId);
       return { features: 0, channels: 0, followedRsos: 0, installation: true } as RemovedRows;

@@ -10,8 +10,10 @@
  *
  * The interface grows one increment at a time. The first increment needed the
  * three link endpoints and a health check. The second adds the reading
- * endpoints the event commands answer from, and the binding confirmation,
- * which is the one setup step the web platform decides rather than Discord.
+ * endpoints the event commands answer from, the binding confirmation, which is
+ * the one setup step the web platform decides rather than Discord, the outbox
+ * the consumer reads, and the interest signal the announcements and the
+ * scheduled event mirror record.
  */
 
 /**
@@ -69,7 +71,7 @@ export class ViaBusyError extends ViaError {
 }
 
 /** The three membership roles the web platform keeps in RSO_Memberships. */
-export type MembershipRole = 'member' | 'editor' | 'board';
+export type MembershipRole = 'member' | 'editor' | 'board' | 'admin';
 
 /** One RSO a linked person belongs to, with the role they hold in it. */
 export interface Membership {
@@ -183,6 +185,87 @@ export interface RsoWithEvents {
   events: ViaEvent[];
 }
 
+/**
+ * One entry of the outbox, which is how the web platform tells the bot that
+ * something happened. The payload is a snapshot of the subject after the
+ * change, so the common case needs no second call, and it is left as it
+ * arrived because each kind carries a different shape. The three readers
+ * below take it apart.
+ */
+export interface OutboxEntry {
+  outboxId: number;
+  /** One of the kinds in section 8 of the design, such as `event.created`. */
+  kind: string;
+  subjectType: string;
+  subjectId: string;
+  /** The organization the entry belongs to, so the bot routes without a lookup. */
+  rsoId: number | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface OutboxPage {
+  entries: OutboxEntry[];
+  /** The cursor to ask from next, or null when the outbox had nothing more. */
+  nextAfter: number | null;
+}
+
+/** What the consumer asks the outbox for: everything after its cursor. */
+export interface OutboxQuery {
+  after: number;
+  limit?: number;
+}
+
+/**
+ * A series of meetings, as the series entries carry it. A series is one thing
+ * rather than sixteen, which is why it has an outbox kind of its own and is
+ * announced once.
+ */
+export interface ViaSeries {
+  seriesId: number;
+  rsoId: number;
+  frequency: string | null;
+  intervalWeeks: number | null;
+  daysOfWeek: string | null;
+  startsOn: string | null;
+  endsOn: string | null;
+  startOfDay: string | null;
+  durationMinutes: number | null;
+}
+
+/**
+ * What a series entry says: the pattern itself, the events that belong to it
+ * now, and the events the change touched. A deletion leaves the first list
+ * empty and names every event it removed in the second.
+ */
+export interface SeriesChange {
+  series: ViaSeries;
+  eventIds: number[];
+  affectedEventIds: number[];
+}
+
+/** Whether interest is being set or cleared, and who by. */
+export interface InterestSignal {
+  interested: boolean;
+  /**
+   * The linked person the bot is acting for, which the web platform records
+   * by NetID.
+   */
+  actingDiscordUserId?: string;
+  /**
+   * The Discord identifier of somebody who is not linked. The web platform
+   * records a salted hash of it, as section 10 of the design requires, so the
+   * count is honest and nobody can reverse it. The bot holds nothing.
+   */
+  discordUserId?: string;
+}
+
+export interface InterestAnswer {
+  ok: boolean;
+  /** How many people are interested in the event after the change. */
+  interestCount: number;
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -207,6 +290,10 @@ export interface ViaClient {
    * `forbidden` when they have one but are not on that board.
    */
   confirmBinding(rsoId: number, actingDiscordUserId: string): Promise<void>;
+  /** The outbox entries after the consumer's cursor, in the order they were written. */
+  readOutbox(query: OutboxQuery): Promise<OutboxPage>;
+  /** Set or clear one person's interest in an event, and read the count after it. */
+  setInterest(eventId: number, interest: InterestSignal): Promise<InterestAnswer>;
   /** Whether the web platform answers. */
   health(): Promise<boolean>;
 }
@@ -240,7 +327,9 @@ export function parseLinkedAccount(body: unknown): LinkedAccount {
       return {
         rsoId: Number(row.rso_id),
         rsoName: String(row.rso_name ?? ''),
-        role: String(row.role ?? 'member') as MembershipRole,
+        // The web platform stores roles capitalised, as Member, Editor, Board and
+        // Admin. The bot speaks of them in lower case, so one place lowers them.
+        role: String(row.role ?? 'member').toLowerCase() as MembershipRole,
       };
     }),
   };
@@ -325,4 +414,91 @@ export function eventQueryParams(query: EventQuery): URLSearchParams {
   if (query.limit !== undefined) params.set('limit', String(query.limit));
   if (query.offset !== undefined) params.set('offset', String(query.offset));
   return params;
+}
+
+export function parseSeries(body: unknown): ViaSeries {
+  const raw = body as Record<string, unknown>;
+  return {
+    seriesId: Number(raw.series_id),
+    rsoId: Number(raw.rso_id),
+    frequency: text(raw.frequency),
+    intervalWeeks: count(raw.interval_weeks),
+    daysOfWeek: text(raw.days_of_week),
+    startsOn: text(raw.starts_on),
+    endsOn: text(raw.ends_on),
+    startOfDay: text(raw.start_of_day),
+    durationMinutes: count(raw.duration_minutes),
+  };
+}
+
+export function parseOutboxEntry(body: unknown): OutboxEntry {
+  const raw = body as Record<string, unknown>;
+  const payload = raw.payload;
+  return {
+    outboxId: Number(raw.outbox_id),
+    kind: String(raw.kind ?? ''),
+    subjectType: String(raw.subject_type ?? ''),
+    subjectId: String(raw.subject_id ?? ''),
+    rsoId: count(raw.rso_id),
+    payload: (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>,
+    createdAt: String(raw.created_at ?? ''),
+  };
+}
+
+export function parseOutboxPage(body: unknown): OutboxPage {
+  const raw = body as Record<string, unknown>;
+  const entries = Array.isArray(raw.entries) ? raw.entries.map(parseOutboxEntry) : [];
+  const next = raw.next_after;
+  return { entries, nextAfter: next === null || next === undefined ? null : Number(next) };
+}
+
+/**
+ * The event an entry carries, or null when the entry is not about one. Every
+ * event in the outbox is read through the same parser the reading endpoints
+ * are, so an announcement and a card are built from the same object.
+ */
+export function outboxEvent(entry: OutboxEntry): ViaEvent | null {
+  const raw = entry.payload.event;
+  return raw && typeof raw === 'object' ? parseEvent(raw) : null;
+}
+
+/** The fields an update says changed, which is empty for anything else. */
+export function outboxChangedFields(entry: OutboxEntry): string[] {
+  const raw = entry.payload.changed;
+  return Array.isArray(raw) ? raw.map(String) : [];
+}
+
+/** The series an entry carries, with the events it holds and the events it touched. */
+export function outboxSeries(entry: OutboxEntry): SeriesChange | null {
+  const raw = entry.payload.series;
+  if (!raw || typeof raw !== 'object') return null;
+  const ids = (value: unknown): number[] =>
+    (Array.isArray(value) ? value.map(Number).filter(Number.isFinite) : []);
+  const eventIds = ids(entry.payload.event_ids);
+  const affected = ids(entry.payload.affected_event_ids);
+  return {
+    series: parseSeries(raw),
+    eventIds,
+    // An entry that names no affected events has touched the events it holds.
+    affectedEventIds: affected.length > 0 ? affected : eventIds,
+  };
+}
+
+export function parseInterestAnswer(body: unknown): InterestAnswer {
+  const raw = body as Record<string, unknown>;
+  return { ok: Boolean(raw.ok), interestCount: Number(raw.interest_count ?? 0) };
+}
+
+/**
+ * What the interest call sends. A linked person is named by the acting
+ * header, so the body says only what they want. Somebody who is not linked is
+ * named in the body by their Discord identifier, which the web platform
+ * hashes with its own salt before recording it.
+ */
+export function interestBody(interest: InterestSignal): Record<string, unknown> {
+  const body: Record<string, unknown> = { interested: interest.interested };
+  if (!interest.actingDiscordUserId && interest.discordUserId) {
+    body.discord_user_id = interest.discordUserId;
+  }
+  return body;
 }

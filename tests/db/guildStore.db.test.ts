@@ -182,6 +182,70 @@ describe('the server records', () => {
     expect(await store().listFollowedRsos(other)).toEqual([4]);
   });
 
+  /**
+   * Which servers hear about an organization is the question every proactive
+   * post begins with, and it has three answers in one query: the servers bound
+   * to that organization, the servers that follow all of ECE, and the servers
+   * whose chosen set contains it. A server that has not been set up is in none
+   * of them, because nothing is posted anywhere until a manager has answered.
+   */
+  describe('the servers that follow an organization', () => {
+    const bound = '900000000000000010';
+    const everything = '900000000000000011';
+    const chosenSet = '900000000000000012';
+    const elsewhere = '900000000000000013';
+    const unanswered = '900000000000000014';
+
+    async function servers() {
+      await store().createInstallation(bound, manager);
+      await store().setKind(bound, 'rso');
+      await store().setBinding(bound, { binding: 'rso', rsoId: 4 });
+
+      await store().createInstallation(everything, manager);
+      await store().setKind(everything, 'community');
+      await store().setBinding(everything, { binding: 'all' });
+
+      await store().createInstallation(chosenSet, manager);
+      await store().setKind(chosenSet, 'community');
+      await store().setBinding(chosenSet, { binding: 'set' });
+      await store().setFollowedRsos(chosenSet, [4, 9]);
+
+      await store().createInstallation(elsewhere, manager);
+      await store().setKind(elsewhere, 'rso');
+      await store().setBinding(elsewhere, { binding: 'rso', rsoId: 9 });
+
+      await store().createInstallation(unanswered, manager);
+    }
+
+    it('answers with the bound server, the server that follows everything and the set that contains it', async () => {
+      await servers();
+      const following = await store().listGuildsFollowing(4);
+      expect(following.map(installation => installation.guildId).sort())
+        .toEqual([bound, everything, chosenSet]);
+    });
+
+    it('leaves out a server bound to another organization and one that never answered setup', async () => {
+      await servers();
+      const following = await store().listGuildsFollowing(4);
+      const ids = following.map(installation => installation.guildId);
+      expect(ids).not.toContain(elsewhere);
+      expect(ids).not.toContain(unanswered);
+    });
+
+    it('carries the mirroring window of each server, which is two weeks until a server changes it', async () => {
+      await servers();
+      const following = await store().listGuildsFollowing(4);
+      for (const installation of following) expect(installation.mirrorWindowDays).toBe(14);
+    });
+
+    it('lists every server that has been set up, for the jobs that run over all of them', async () => {
+      await servers();
+      const all = await store().listInstallations();
+      expect(all.map(installation => installation.guildId).sort())
+        .toEqual([bound, everything, chosenSet, elsewhere]);
+    });
+  });
+
   it('says it deleted nothing for a server the bot was never installed in', async () => {
     expect(await store().removeGuild(guild)).toEqual({
       features: 0, channels: 0, followedRsos: 0, installation: false,

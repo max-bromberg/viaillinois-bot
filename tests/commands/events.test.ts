@@ -4,6 +4,7 @@ import { eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponen
 import { PAGE_SIZE } from '../../src/render/eventList.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
 import { interaction, testContext } from './support.ts';
+import { ViaError } from '../../src/via/client.ts';
 
 /**
  * The three reading commands.
@@ -285,11 +286,51 @@ describe('the buttons on the event card', () => {
     expect(reply.content).not.toContain('Link my account');
   });
 
-  it('tells a linked person plainly that marking interest is not built yet', async () => {
+  /**
+   * Interest is what replaces the RSVPs the web platform removed, so the
+   * button records it on VIA rather than in the bot, and the answer says how
+   * many people are interested now, which is the one thing the person who
+   * pressed it wants to know.
+   */
+  it('records interest on VIA for a linked person, as the person acting', async () => {
     const { context, via } = testContext();
     via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10, title: 'General meeting', interestCount: 3 });
+
     const reply = await eventComponent.run(press('event:interested:10'), context);
-    expect(reply.content).toContain('not ready yet');
+    expect(via.interests).toEqual([
+      { eventId: 10, interested: true, actingDiscordUserId: ROSA },
+    ]);
+    expect(reply.content).toContain('General meeting');
+    expect(reply.content).toContain('4');
+  });
+
+  it('counts one person once, however many times they press it', async () => {
+    const { context, via } = testContext();
+    via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10, interestCount: 3 });
+
+    await eventComponent.run(press('event:interested:10'), context);
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+    expect(reply.content).toContain('4');
+  });
+
+  it('says so in a sentence when the event has gone since the card was posted', async () => {
+    const { context, via } = testContext();
+    via.seedLink(ROSA);
+    via.clearEvents();
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+    expect(reply.content).toContain('VIA does not have that event any more');
+  });
+
+  it('says VIA is not answering rather than failing when the call is refused', async () => {
+    const { context, via } = testContext();
+    via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10 });
+    via.failNextWith(new ViaError('The database is down.', 500, 'invalid'));
+
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+    expect(reply.content).toContain('VIA is not answering right now');
   });
 
   it('answers the calendar file as an attachment, for anybody at all', async () => {

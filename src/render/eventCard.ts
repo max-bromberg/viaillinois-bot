@@ -89,24 +89,44 @@ function joinWords(words: string[]): string {
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
+/** What a series repeats on, in the three fields that say it. */
+export interface SeriesPattern {
+  intervalWeeks: number | null;
+  daysOfWeek: string | null;
+  endsOn: string | null;
+}
+
 /**
  * The pattern a series repeats on, written out. A recurring meeting is one
  * thing rather than sixteen, and a card that says so saves a student working
  * it out from a list of identical titles.
+ *
+ * The sentence is built here rather than in the card, because the
+ * announcement of a series has the pattern from the series itself rather than
+ * from one of its meetings and has to say the same thing.
  */
-export function patternOf(event: ViaEvent): string {
-  if (!event.seriesId) return '';
-  const weeks = event.seriesIntervalWeeks ?? 1;
+export function describePattern(pattern: SeriesPattern): string {
+  const weeks = pattern.intervalWeeks ?? 1;
   const every = weeks <= 1 ? 'every week' : `every ${weeks} weeks`;
-  const days = (event.seriesDaysOfWeek ?? '')
+  const days = (pattern.daysOfWeek ?? '')
     .split(',')
     .map(code => DAY_NAMES[code.trim().toUpperCase()])
     .filter(Boolean) as string[];
 
   const parts = [`This meeting repeats ${every}`];
   if (days.length > 0) parts.push(` on ${joinWords(days)}`);
-  if (event.seriesEndsOn) parts.push(`, until ${campusDate(event.seriesEndsOn)}`);
+  if (pattern.endsOn) parts.push(`, until ${campusDate(pattern.endsOn)}`);
   return `${parts.join('')}.`;
+}
+
+/** The pattern of the series an event belongs to, or nothing for an event that stands alone. */
+export function patternOf(event: ViaEvent): string {
+  if (!event.seriesId) return '';
+  return describePattern({
+    intervalWeeks: event.seriesIntervalWeeks,
+    daysOfWeek: event.seriesDaysOfWeek,
+    endsOn: event.seriesEndsOn,
+  });
 }
 
 /** The description, cut at a word rather than in the middle of one. */

@@ -37,6 +37,8 @@ describe('GET /health', () => {
       gateway: true,
       database: true,
       viaPlatform: true,
+      outboxCursor: null,
+      lastPollAt: null,
     });
   });
 
@@ -107,5 +109,56 @@ describe('GET /health', () => {
   it('reports the port it actually bound', async () => {
     server = await startHealthServer(healthyProbes(), 0);
     expect(server.port).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The consumer is the half of the bot nobody can see from outside: it holds no
+ * connection anybody can probe, and a consumer that has quietly stopped looks
+ * exactly like one with nothing to do. So the health endpoint reports how far
+ * through the outbox it has read and when it last looked, and the cutover can
+ * tell the two apart.
+ */
+describe('what the health endpoint says about the outbox consumer', () => {
+  it('reports the cursor and the last poll when a consumer is running', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      outboxConsumer: () => ({ cursor: 42, lastPollAt: '2026-09-05 09:30:00' }),
+    });
+    expect(status).toBe(200);
+    expect(body.outboxCursor).toBe(42);
+    expect(body.lastPollAt).toBe('2026-09-05 09:30:00');
+  });
+
+  it('reports nothing rather than a made up cursor before the first poll', async () => {
+    const { body } = await health({
+      ...healthyProbes(),
+      outboxConsumer: () => ({ cursor: null, lastPollAt: null }),
+    });
+    expect(body.outboxCursor).toBe(null);
+    expect(body.lastPollAt).toBe(null);
+  });
+
+  /**
+   * The consumer is not a readiness check. A bot whose consumer has not polled
+   * yet is a bot that started a moment ago, and refusing the deploy for that
+   * would refuse every deploy.
+   */
+  it('still answers 200 when the consumer has not polled yet', async () => {
+    const { status } = await health({
+      ...healthyProbes(),
+      outboxConsumer: () => ({ cursor: null, lastPollAt: null }),
+    });
+    expect(status).toBe(200);
+  });
+
+  it('reports nothing rather than failing when the consumer state cannot be read', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      outboxConsumer: () => { throw new Error('the consumer is not wired'); },
+    });
+    expect(status).toBe(200);
+    expect(body.outboxCursor).toBe(null);
+    expect(body.lastPollAt).toBe(null);
   });
 });

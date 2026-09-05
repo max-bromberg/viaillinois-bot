@@ -112,6 +112,26 @@ export function memoryGuildStore(): GuildStore {
     async listFollowedRsos(guildId) {
       return [...(followed.get(guildId) ?? [])];
     },
+    async listGuildsFollowing(rsoId) {
+      const following: GuildInstallation[] = [];
+      for (const [guildId, row] of installations) {
+        if (row.kind === null) continue;
+        const follows = (row.binding === 'rso' && row.rsoId === rsoId)
+          || row.binding === 'all'
+          || (row.binding === 'set' && (followed.get(guildId) ?? []).includes(rsoId));
+        if (!follows) continue;
+        following.push((await this.getInstallation(guildId))!);
+      }
+      return following;
+    },
+    async listInstallations() {
+      const all: GuildInstallation[] = [];
+      for (const [guildId, row] of installations) {
+        if (row.kind === null || row.binding === null) continue;
+        all.push((await this.getInstallation(guildId))!);
+      }
+      return all;
+    },
     async removeGuild(guildId) {
       const removed: RemovedRows = {
         features: featuresOf(guildId).size,

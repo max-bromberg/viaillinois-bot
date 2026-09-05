@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  campusDate, campusDateTime, campusTimeOfDay, campusToday, relativeTimestamp, windowRange,
+  campusDate, campusDatePlus, campusDateTime, campusStamp, campusTimeOfDay, campusToday,
+  relativeTimestamp, windowRange,
 } from '../../src/render/campusTime.ts';
 
 /**
@@ -104,5 +105,36 @@ describe('the window a listing asks for', () => {
 
   it('asks for nothing in particular when no window was named', () => {
     expect(windowRange(null, thursday)).toEqual({});
+  });
+});
+
+/**
+ * The datetime columns of the bot's database hold campus wall clock, as the
+ * web platform's do, so a row the bot writes needs the campus clock in the
+ * shape MySQL stores. The mirroring window needs the campus date a fortnight
+ * from now for the same reason: a window is counted in days on a calendar
+ * rather than in milliseconds on a clock that moves twice a year.
+ */
+describe('campus time as the database holds it', () => {
+  it('writes the campus wall clock in the shape a datetime column takes', () => {
+    expect(campusStamp(new Date('2026-09-05T14:30:00Z'))).toBe('2026-09-05 09:30:00');
+  });
+
+  it('writes the winter clock in winter and the summer clock in summer', () => {
+    expect(campusStamp(new Date('2026-01-15T14:30:00Z'))).toBe('2026-01-15 08:30:00');
+    expect(campusStamp(new Date('2026-07-15T14:30:00Z'))).toBe('2026-07-15 09:30:00');
+  });
+
+  it('counts a campus day at a time towards the end of the mirroring window', () => {
+    const thursday = new Date('2026-09-10T17:00:00Z');
+    expect(campusDatePlus(0, thursday)).toBe('2026-09-10');
+    expect(campusDatePlus(14, thursday)).toBe('2026-09-24');
+  });
+
+  it('counts across the day the clocks go back without losing or gaining a day', () => {
+    // Daylight saving ends on 1 November 2026 on campus, so the fortnight
+    // from the last Thursday in October still ends on a Thursday.
+    const october = new Date('2026-10-29T17:00:00Z');
+    expect(campusDatePlus(14, october)).toBe('2026-11-12');
   });
 });

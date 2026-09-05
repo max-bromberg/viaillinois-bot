@@ -30,6 +30,12 @@ export interface GatewayOptions {
   onGuildCreate?: (raw: unknown) => Promise<void>;
   /** Told about a server the bot has left or that has gone down. */
   onGuildDelete?: (raw: unknown) => Promise<void>;
+  /**
+   * Told when somebody marks themselves interested in one of a server's
+   * scheduled events, and when they take that back. Both events are one signal
+   * with a direction, so one handler answers both and is told which it was.
+   */
+  onScheduledEventInterest?: (rawEvent: unknown, rawUser: unknown, interested: boolean) => Promise<void>;
   /** Injected by tests, which pass a client that connects to nothing. */
   createClient?: (options: ClientOptions) => Client;
 }
@@ -50,6 +56,7 @@ export function createGateway(options: GatewayOptions): BotGateway {
     onReady,
     onGuildCreate,
     onGuildDelete,
+    onScheduledEventInterest,
     createClient = (clientOptions: ClientOptions) => new Client(clientOptions),
   } = options;
 
@@ -82,6 +89,23 @@ export function createGateway(options: GatewayOptions): BotGateway {
 
   client.on(Events.GuildCreate, guard('handling a server the bot is in', onGuildCreate));
   client.on(Events.GuildDelete, guard('handling a server the bot has left', onGuildDelete));
+
+  /**
+   * One person's interest failing to reach VIA must not take the connection
+   * down either, and there is nobody to answer, so it is logged like the
+   * others.
+   */
+  const interest = (interested: boolean) => async (rawEvent: unknown, rawUser: unknown) => {
+    if (!onScheduledEventInterest) return;
+    try {
+      await onScheduledEventInterest(rawEvent, rawUser, interested);
+    } catch (err) {
+      console.error('recording interest in a scheduled event failed:', (err as Error).message);
+    }
+  };
+
+  client.on(Events.GuildScheduledEventUserAdd, interest(true));
+  client.on(Events.GuildScheduledEventUserRemove, interest(false));
 
   client.on(Events.InteractionCreate, async (interaction: unknown) => {
     try {

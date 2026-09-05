@@ -9,10 +9,20 @@ import { withHotReadCache } from './via/cache.ts';
 import { createGateway } from './discord/client.ts';
 import { createGuildStore } from './guilds/store.ts';
 import { createGuildLifecycle } from './guilds/lifecycle.ts';
+import { createFeatureDisabler } from './guilds/disable.ts';
 import { createDirectMessageSender } from './discord/directMessages.ts';
+import { createDiscordActions, toScheduledEventInterest } from './discord/adapter.ts';
 import { buildCommands, putCommands } from './discord/registerCommands.ts';
 import { createRateWindows } from './ratelimit/windows.ts';
 import { createDispatcher, deleteLocalData } from './commands/index.ts';
+import { createDeliveries } from './delivery/deliveries.ts';
+import { createEventMirrors } from './mirror/eventMirrors.ts';
+import { createScheduledEventMirror } from './mirror/scheduledEvents.ts';
+import { createInterestRecorder } from './mirror/interest.ts';
+import { createAnnouncementHandlers } from './announce/handlers.ts';
+import { createOutboxCursors } from './outbox/cursor.ts';
+import { createOutboxConsumer } from './outbox/consumer.ts';
+import { createMirrorWindowJob } from './jobs/mirrorWindow.ts';
 
 /**
  * The bot's entry point, which is the one place everything is wired together.
@@ -43,6 +53,9 @@ const via = withHotReadCache(createViaHttpClient({
 
 const guilds = createGuildStore(db);
 const guildLifecycle = createGuildLifecycle({ guilds });
+const deliveries = createDeliveries(db);
+const mirrors = createEventMirrors(db);
+const cursors = createOutboxCursors(db);
 
 const rateWindows = createRateWindows({ db, limits: config.rateLimits });
 
@@ -60,7 +73,50 @@ const gateway = createGateway({
   dispatch: raw => dispatch(raw),
   onGuildCreate: raw => guildLifecycle.onGuildCreate(raw),
   onGuildDelete: raw => guildLifecycle.onGuildDelete(raw),
+  onScheduledEventInterest: (rawEvent, rawUser, interested) =>
+    recordInterest(toScheduledEventInterest(rawEvent, rawUser), interested),
 });
+
+/**
+ * Everything proactive hangs off the gateway's client, so it is built after
+ * the gateway and before the dispatcher, which needs the scheduled event
+ * mirror to clear a server on removal.
+ */
+const actions = createDiscordActions(gateway.client);
+const sendDirectMessage = createDirectMessageSender(gateway.client);
+const disable = createFeatureDisabler({ guilds, deliveries, sendDirectMessage });
+
+const scheduledEvents = createScheduledEventMirror({
+  guilds,
+  mirrors,
+  deliveries,
+  actions,
+  via,
+  disable,
+  now: () => new Date(),
+});
+
+const recordInterest = createInterestRecorder({ via, mirrors });
+
+const consumer = createOutboxConsumer({
+  via,
+  cursors,
+  handlers: createAnnouncementHandlers({
+    guilds,
+    mirrors,
+    deliveries,
+    actions,
+    via,
+    disable,
+    websiteUrl: config.viaPublicUrl,
+    mirror: scheduledEvents,
+  }),
+  // The cache is dropped for an organization the moment an entry touches it,
+  // so a change made on the website shows in Discord within seconds.
+  invalidateRso: rsoId => via.invalidateRso(rsoId),
+});
+
+const mirrorWindow = createMirrorWindowJob({ guilds, mirror: scheduledEvents });
 
 const dispatch = createDispatcher({
   via,
@@ -68,8 +124,9 @@ const dispatch = createDispatcher({
   websiteUrl: config.viaPublicUrl,
   rateWindows,
   deleteLocalData: discordUserId => deleteLocalData(db, discordUserId),
+  removeGuildPresence: guildId => scheduledEvents.removeGuildPresence(guildId),
   sendDirectMessage: async (discordUserId, content) => {
-    await createDirectMessageSender(gateway.client)(discordUserId, content);
+    await sendDirectMessage(discordUserId, content);
   },
   schedule,
   now: () => new Date(),
@@ -85,6 +142,7 @@ const health = await startHealthServer({
     return true;
   },
   viaPlatform: () => via.health(),
+  outboxConsumer: () => consumer.state(),
 }, config.healthPort);
 
 console.log(`via-bot ${version}: health listening on port ${health.port}`);
@@ -99,8 +157,22 @@ console.log(`via-bot: registered ${registered} application commands`);
 
 await gateway.login();
 
+/**
+ * The consumer and the daily job start once the gateway is up, because both
+ * of them post into Discord and neither can until there is a connection to
+ * post through. Neither loop is awaited: they run until the process stops.
+ */
+void consumer.start();
+console.log('via-bot: the outbox consumer is running');
+void mirrorWindow.start();
+console.log('via-bot: the mirroring window will be rolled daily');
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
+    // The loops stop before the connections they use go, so that nothing is
+    // half way through a post when the pool closes under it.
+    await consumer.stop();
+    await mirrorWindow.stop();
     await gateway.destroy();
     await health.close();
     await pool.end();

@@ -131,6 +131,17 @@ export function campusToday(now: Date = new Date()): string {
   return isoDay(fieldsOf(now));
 }
 
+/**
+ * The campus wall clock in the shape a datetime column holds, which is what
+ * every datetime the bot writes is. The database keeps campus time, as the web
+ * platform's does, so a row written here and a row written there read the same.
+ */
+export function campusStamp(now: Date = new Date()): string {
+  const fields = fieldsOf(now);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${isoDay(fields)} ${pad(fields.hour)}:${pad(fields.minute)}:${pad(fields.second)}`;
+}
+
 /** The windows the events command offers, named as its options name them. */
 export type ListingWindow = 'today' | 'thisweek' | 'nextweek' | 'thismonth';
 
@@ -153,6 +164,15 @@ function addDays(fields: CampusFields, days: number): CampusFields {
     day: moved.getUTCDate(),
     hour: 0, minute: 0, second: 0,
   };
+}
+
+/**
+ * The campus date a number of days from today, as YYYY-MM-DD. The mirroring
+ * window is counted with this rather than by adding milliseconds, because a
+ * day is not always twenty four hours long on a clock that moves twice a year.
+ */
+export function campusDatePlus(days: number, now: Date = new Date()): string {
+  return isoDay(addDays(fieldsOf(now), days));
 }
 
 /** Which day of the week a campus date falls on, zero for Sunday, as the digest day counts. */

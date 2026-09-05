@@ -19,6 +19,21 @@ export interface HealthProbes {
   database: () => Promise<boolean>;
   /** Whether the web platform's internal service API answers. */
   viaPlatform: () => Promise<boolean>;
+  /**
+   * How far through the outbox the consumer has read and when it last looked.
+   * The consumer holds no connection anybody can probe from outside, and one
+   * that has quietly stopped looks exactly like one with nothing to do, so the
+   * cutover reads these two fields to tell them apart. It is not a readiness
+   * check: a bot that started a moment ago has not polled yet, and refusing
+   * the deploy for that would refuse every deploy.
+   */
+  outboxConsumer?: () => ConsumerReport;
+}
+
+/** What the consumer says about itself, or nothing before its first poll. */
+export interface ConsumerReport {
+  cursor: number | null;
+  lastPollAt: string | null;
 }
 
 export interface HealthReport {
@@ -28,6 +43,10 @@ export interface HealthReport {
   gateway: boolean;
   database: boolean;
   viaPlatform: boolean;
+  /** The last outbox entry the consumer finished, or null before its first poll. */
+  outboxCursor: number | null;
+  /** When the consumer last read the outbox, in campus wall clock. */
+  lastPollAt: string | null;
 }
 
 export interface HealthServer {
@@ -64,6 +83,15 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
     probe('viaPlatform', probes.viaPlatform),
   ]);
 
+  let consumer: ConsumerReport = { cursor: null, lastPollAt: null };
+  try {
+    consumer = probes.outboxConsumer?.() ?? consumer;
+  } catch (err) {
+    // A consumer that cannot say where it is says nothing, rather than
+    // failing a check that is about the three connections.
+    console.error('health check outboxConsumer failed:', (err as Error).message);
+  }
+
   const ok = migrationVersion !== null && gateway && database && viaPlatform;
   return {
     code: ok ? 200 : 503,
@@ -74,6 +102,8 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
       gateway,
       database,
       viaPlatform,
+      outboxCursor: consumer.cursor,
+      lastPollAt: consumer.lastPollAt,
     },
   };
 }

@@ -754,7 +754,13 @@ export const removeCommand: CommandHandler = {
 
     const deleted = await context.guilds.removeGuild(guildId);
 
-    if (!deleted.installation && !cleared) {
+    // A hook that cleared nothing is the same as no hook at all here: a server
+    // the bot holds no rows for and posted nothing in has nothing to remove,
+    // and saying that it has been removed would be a sentence about nothing.
+    const clearedSomething = cleared !== null
+      && (cleared.scheduledEvents > 0 || cleared.unpinnedMessages > 0);
+
+    if (!deleted.installation && !clearedSomething) {
       return { content: 'The bot has nothing set up in this server, so there was nothing to remove.' };
     }
 

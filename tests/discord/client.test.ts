@@ -147,3 +147,65 @@ describe('the gateway and the servers it is in', () => {
     await expect(client.fire(Events.GuildCreate, { id: '900000000000000001' })).resolves.toBeUndefined();
   });
 });
+
+/**
+ * Interest on a scheduled event.
+ *
+ * The Events tab is where a member marks themselves interested with Discord's
+ * own control, and the gateway is the only way the bot hears about it. The
+ * two events are one signal with a direction, so the gateway hands both to
+ * the same handler and says which of the two it was.
+ */
+describe('the gateway and the interest people leave on scheduled events', () => {
+  function withInterest() {
+    const signals: Array<{ event: unknown; user: unknown; interested: boolean }> = [];
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      onScheduledEventInterest: async (event: unknown, user: unknown, interested: boolean) => {
+        signals.push({ event, user, interested });
+      },
+      createClient: () => client as never,
+    });
+    return { client, signals };
+  }
+
+  const scheduledEvent = { id: '600000000000000001', guildId: '900000000000000001' };
+  const person = { id: '204255221017214977' };
+
+  it('hears a member marking themselves interested', async () => {
+    const { client, signals } = withInterest();
+    await client.fire(Events.GuildScheduledEventUserAdd, scheduledEvent, person);
+    expect(signals).toEqual([{ event: scheduledEvent, user: person, interested: true }]);
+  });
+
+  it('hears a member taking their interest back', async () => {
+    const { client, signals } = withInterest();
+    await client.fire(Events.GuildScheduledEventUserRemove, scheduledEvent, person);
+    expect(signals).toEqual([{ event: scheduledEvent, user: person, interested: false }]);
+  });
+
+  it('stays connected when recording interest throws', async () => {
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      onScheduledEventInterest: async () => { throw new Error('VIA did not answer'); },
+      createClient: () => client as never,
+    });
+    await expect(client.fire(Events.GuildScheduledEventUserAdd, scheduledEvent, person))
+      .resolves.toBeUndefined();
+  });
+
+  it('connects without an interest handler at all, for a run that has none', async () => {
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      createClient: () => client as never,
+    });
+    await expect(client.fire(Events.GuildScheduledEventUserAdd, scheduledEvent, person))
+      .resolves.toBeUndefined();
+  });
+});

@@ -25,10 +25,10 @@ export interface CommandContext {
    * before it deletes the rows that say where those posts are.
    *
    * The design has removal delete every scheduled event the bot created and
-   * unpin the message it pinned. Neither exists yet, because the half of this
-   * increment that creates them has not been written, so this is left out of
-   * the wiring and the removal says what it actually did. When the scheduled
-   * events and the pinned message arrive, they are given to removal here.
+   * unpin the message it pinned. The scheduled events are deleted by the
+   * scheduled event mirror, which is what the entry point gives this. Nothing
+   * is unpinned yet, because the one message the bot pins is the living this
+   * week message, which arrives in the third increment.
    */
   removeGuildPresence?: (guildId: string) => Promise<RemovedGuildPresence>;
   /** Send one direct message, which only ever goes to a linked person. */

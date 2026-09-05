@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { guildChannels, guildFeatures, guildFollowedRsos, guildInstallations } from '../db/schema.ts';
 import { featureById, type ChannelPurpose } from '../features/registry.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
@@ -75,6 +75,14 @@ export interface GuildStore {
   /** Replace the followed set, which is what the multiple choice panel writes. */
   setFollowedRsos(guildId: string, rsoIds: readonly number[]): Promise<void>;
   listFollowedRsos(guildId: string): Promise<number[]>;
+  /**
+   * Every server that hears about an organization: the servers bound to it,
+   * the servers that follow all of ECE, and the servers whose chosen set
+   * contains it. A server that has not been set up is in none of them.
+   */
+  listGuildsFollowing(rsoId: number): Promise<GuildInstallation[]>;
+  /** Every server that has been set up, for the jobs that run over all of them. */
+  listInstallations(): Promise<GuildInstallation[]>;
   /** Delete every row the bot holds for a server, and say what it deleted. */
   removeGuild(guildId: string): Promise<RemovedRows>;
 }
@@ -188,6 +196,44 @@ export function createGuildStore(db: BotDatabase): GuildStore {
       const rows = await db.select().from(guildFollowedRsos)
         .where(eq(guildFollowedRsos.guildId, guildId));
       return rows.map(row => row.rsoId).sort((a, b) => a - b);
+    },
+
+    /**
+     * The three ways a server can follow an organization are one question, so
+     * they are one answer rather than three calls the caller has to put
+     * together. The set is read first and folded into the same condition, so a
+     * server appears once however many ways it qualifies.
+     */
+    async listGuildsFollowing(rsoId) {
+      const inSet = await db.select().from(guildFollowedRsos)
+        .where(eq(guildFollowedRsos.rsoId, rsoId));
+      const setGuildIds = inSet.map(row => row.guildId);
+
+      const conditions = [
+        and(eq(guildInstallations.binding, 'rso'), eq(guildInstallations.rsoId, rsoId)),
+        eq(guildInstallations.binding, 'all'),
+      ];
+      if (setGuildIds.length > 0) {
+        conditions.push(and(
+          eq(guildInstallations.binding, 'set'),
+          inArray(guildInstallations.guildId, setGuildIds),
+        ));
+      }
+
+      const rows = await db.select().from(guildInstallations)
+        .where(and(isNotNull(guildInstallations.kind), or(...conditions)));
+      return rows.map(present);
+    },
+
+    /**
+     * Only the servers that have been set up. A server the bot was invited to
+     * and never asked about has no kind and no binding, and a job that ran
+     * over it would be posting into a server that has not asked for anything.
+     */
+    async listInstallations() {
+      const rows = await db.select().from(guildInstallations)
+        .where(and(isNotNull(guildInstallations.kind), isNotNull(guildInstallations.binding)));
+      return rows.map(present);
     },
 
     /**
