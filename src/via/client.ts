@@ -1,3 +1,4 @@
+import { campusStamp, toInstant } from '../render/campusTime.ts';
 /**
  * The web platform client.
  *
@@ -375,6 +376,128 @@ export interface Building {
   address: string | null;
 }
 
+/**
+ * What a postponement changes. The two times are campus wall clock, as
+ * YYYY-MM-DD HH:MM:SS or YYYY-MM-DD HH:MM, which is the shape the web
+ * platform's own reader parses. The reason is optional and travels with the
+ * change into the outbox entry, so an announcement can say why rather than
+ * only that.
+ */
+export interface Postponement {
+  startTime: string;
+  endTime: string;
+  reason?: string;
+}
+
+/**
+ * The three fields an event can be changed by from Discord. Everything else
+ * about an event is a decision with a room and a time in it, which belongs on
+ * the dashboard where the conflicts can be shown. A field left out is left
+ * alone, and a description or a note set to null is cleared.
+ */
+export interface EventChanges {
+  description?: string | null;
+  isPrivate?: boolean;
+  locationNote?: string | null;
+}
+
+/** One person on an organization's board, as the members endpoint answers them. */
+export interface RsoMember {
+  /**
+   * The NetID the web platform holds. The bot reads it to work out who a
+   * membership is about and never writes it down: section 7 of the design
+   * says the bot stores Discord identifiers and VIA identifiers and nothing
+   * else that identifies a person.
+   */
+  netId: string;
+  fullName: string | null;
+  role: MembershipRole;
+}
+
+/**
+ * What the scheduler is asked. This is the dashboard's own request, in the
+ * spelling the scheduler route reads it in, because the bot asks the same
+ * question the dashboard asks and the two surfaces have to weigh a candidate
+ * the same way.
+ */
+export interface ScheduleRequest {
+  /** The organization, which is what the web platform decides editorship against. */
+  rsoId: number;
+  durationMinutes: number;
+  dateRange: { start: string; end: string };
+  /** The window of the day a meeting may run in, by the hour. */
+  timeConstraint?: { startHour: number; endHour: number } | null;
+  /**
+   * The repeat the search is for. A repeat that names no end runs to the end
+   * of instruction, which the web platform fills in.
+   */
+  recurrence?: { intervalWeeks: number; daysOfWeek: readonly string[]; until?: string } | null;
+}
+
+/**
+ * One evening the scheduler recommends: when it is, which room, what it
+ * scored, why, and how the repeat behind it would run. The recurrence fields
+ * are null for a search over one week, which asks about a single slot rather
+ * than about a term of them.
+ */
+export interface ScheduleCandidate {
+  /** Campus wall clock, as the scheduler works in. */
+  startTime: string;
+  endTime: string;
+  locationId: number | null;
+  building: string | null;
+  roomNumber: string | null;
+  maxCapacity: number | null;
+  score: number;
+  /** Why the scheduler weighed the slot as it did, in its own words. */
+  reasons: string[];
+  intervalWeeks: number | null;
+  daysOfWeek: string[];
+  /** How many weeks the repeat covers, and how many of them the room is free. */
+  weeksTotal: number | null;
+  weeksClear: number | null;
+  /** The dates the room is taken, which the board reads before accepting. */
+  conflicts: string[];
+  /** The last date the repeat would run on. */
+  until: string | null;
+}
+
+/**
+ * What the scheduler answers: one slot per hour of the day it would pick, and
+ * the wider list behind them. The dashboard shows both, and so does the bot.
+ */
+export interface ScheduleRecommendations {
+  curatedPicks: ScheduleCandidate[];
+  allOptions: ScheduleCandidate[];
+}
+
+/** What creating a repeat asks for, in the shape the series controller reads. */
+export interface SeriesRequest {
+  rsoId: number;
+  title: string;
+  description?: string | null;
+  /** Campus wall clock for the first meeting. */
+  startTime: string;
+  endTime: string;
+  isPrivate?: boolean;
+  locationId?: number | null;
+  locationText?: string | null;
+  recurrence: {
+    intervalWeeks: number;
+    daysOfWeek: readonly string[];
+    endsOn?: string;
+    startsOn?: string;
+  };
+}
+
+/** What was created, and which dates were left out because the room was taken. */
+export interface SeriesCreated {
+  seriesId: number;
+  eventIds: number[];
+  created: number;
+  skipped: string[];
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -433,6 +556,30 @@ export interface ViaClient {
   freeRooms(query: FreeRoomQuery): Promise<FreeRooms>;
   /** What a building code stands for, or null when VIA does not know the code. */
   getBuilding(code: string): Promise<Building | null>;
+  /**
+   * The acting endpoints, which are the ones a person does something with.
+   *
+   * Every one of them names the acting Discord account and nothing else, and
+   * every one of them can be refused with `not_linked` or `forbidden`. The bot
+   * turns each refusal into the sentence the person reads and decides nothing
+   * for itself, because who may act on an organization's events is the web
+   * platform's answer and not the bot's.
+   */
+  postponeEvent(eventId: number, postponement: Postponement, actingDiscordUserId: string): Promise<ViaEvent | null>;
+  /** Cancel one event, answering with the moment the web platform recorded. */
+  cancelEvent(eventId: number, actingDiscordUserId: string): Promise<string | null>;
+  /** Change the description, the visibility or the location note of one event. */
+  patchEvent(eventId: number, changes: EventChanges, actingDiscordUserId: string): Promise<ViaEvent | null>;
+  /** Ask the same scheduler the dashboard asks, for the organization the request names. */
+  recommendSchedule(request: ScheduleRequest, actingDiscordUserId: string): Promise<ScheduleRecommendations>;
+  /** Create a repeat, exactly as the dashboard's own form does. */
+  createEventSeries(request: SeriesRequest, actingDiscordUserId: string): Promise<SeriesCreated>;
+  /**
+   * The members of an organization, which only a board member of it may read.
+   * The role reconciliation asks for this as the board member the server
+   * recorded when it was bound.
+   */
+  listRsoMembers(rsoId: number, actingDiscordUserId: string): Promise<RsoMember[]>;
   /** Whether the web platform answers. */
   health(): Promise<boolean>;
 }
@@ -599,6 +746,17 @@ export function parseOutboxPage(body: unknown): OutboxPage {
 export function outboxEvent(entry: OutboxEntry): ViaEvent | null {
   const raw = entry.payload.event;
   return raw && typeof raw === 'object' ? parseEvent(raw) : null;
+}
+
+/**
+ * Why a change was made, when whoever made it said. A postponement from
+ * Discord carries a reason and an ordinary edit does not, and the reason
+ * belongs to the change rather than to the event, which is why it is on the
+ * entry rather than in the event it carries.
+ */
+export function outboxReason(entry: OutboxEntry): string | null {
+  const raw = entry.payload.reason;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
 /** The fields an update says changed, which is empty for anything else. */
@@ -774,4 +932,178 @@ export function midtermQueryParams(query: MidtermQuery): URLSearchParams {
 export function outboxMidterm(entry: OutboxEntry): Midterm | null {
   const raw = entry.payload.midterm;
   return raw && typeof raw === 'object' ? parseMidterm(raw) : null;
+}
+
+/**
+ * The acting answers.
+ *
+ * Postponing and patching answer with the event as it now stands, in the same
+ * shape every reading endpoint uses, so a card drawn after a change is drawn
+ * by the same code as a card drawn before it.
+ */
+export function parseActingEvent(body: unknown): ViaEvent | null {
+  const raw = (body as Record<string, unknown> | null)?.event;
+  return raw && typeof raw === 'object' ? parseEvent(raw) : null;
+}
+
+/** The body a postponement sends, with the reason only when there is one. */
+export function postponementBody(postponement: Postponement): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    start_time: postponement.startTime,
+    end_time: postponement.endTime,
+  };
+  const reason = (postponement.reason ?? '').trim();
+  if (reason) body.reason = reason;
+  return body;
+}
+
+/**
+ * The body a change sends. A field the caller did not name is left out, which
+ * is how the request says it means to leave that field alone, and a field
+ * named as null is sent as null, which is how it says to clear it.
+ */
+export function eventChangesBody(changes: EventChanges): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if ('description' in changes) body.description = changes.description ?? null;
+  if ('isPrivate' in changes) body.is_private = Boolean(changes.isPrivate);
+  if ('locationNote' in changes) body.location_note = changes.locationNote ?? null;
+  return body;
+}
+
+export function parseRsoMember(body: unknown): RsoMember {
+  const raw = body as Record<string, unknown>;
+  return {
+    netId: String(raw.net_id ?? ''),
+    fullName: text(raw.full_name),
+    // The web platform stores roles capitalised, as it does everywhere else,
+    // and the bot speaks of them in lower case.
+    role: String(raw.role ?? 'member').toLowerCase() as MembershipRole,
+  };
+}
+
+export function parseRsoMembers(body: unknown): RsoMember[] {
+  const raw = (body as Record<string, unknown> | null)?.members;
+  return Array.isArray(raw) ? raw.map(parseRsoMember) : [];
+}
+
+/**
+ * What the scheduler asks for, in the spelling its route reads.
+ *
+ * The window of the day is sent as a required constraint, because a board that
+ * said its meetings run in the evening does not want a recommendation at nine
+ * in the morning with a few points taken off.
+ */
+export function scheduleRequestBody(request: ScheduleRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    rso_id: request.rsoId,
+    durationMinutes: request.durationMinutes,
+    dateRange: { start: request.dateRange.start, end: request.dateRange.end },
+  };
+  if (request.timeConstraint) {
+    body.timeConstraint = {
+      startHour: request.timeConstraint.startHour,
+      endHour: request.timeConstraint.endHour,
+      tier: 'required',
+    };
+  }
+  if (request.recurrence) {
+    const recurrence: Record<string, unknown> = {
+      intervalWeeks: request.recurrence.intervalWeeks,
+      daysOfWeek: [...request.recurrence.daysOfWeek],
+    };
+    if (request.recurrence.until) recurrence.until = request.recurrence.until;
+    body.recurrence = recurrence;
+  }
+  return body;
+}
+
+/**
+ * One candidate, read out of the scheduler's own answer. The room sits under
+ * a location object and the repeat under a recurrence object, and both are
+ * flattened here so that everything a card shows is one field.
+ */
+/** A time the web platform sent with its offset, as the campus wall clock it names. */
+function wallClockOf(value: unknown): string {
+  const instant = toInstant(String(value ?? ''));
+  return instant ? campusStamp(instant) : '';
+}
+
+export function parseScheduleCandidate(body: unknown): ScheduleCandidate {
+  const raw = body as Record<string, unknown>;
+  const location = (raw.location ?? {}) as Record<string, unknown>;
+  const recurrence = (raw.recurrence ?? null) as Record<string, unknown> | null;
+  const insights = Array.isArray(raw.insights) ? raw.insights : [];
+  const dates = (value: unknown): string[] =>
+    (Array.isArray(value) ? value.map(String) : []);
+
+  return {
+    // The web platform sends every time with the campus offset on it. A
+    // candidate goes back to the web platform as the wall clock the series
+    // form posts, so it is read as wall clock here, once.
+    startTime: wallClockOf(raw.start),
+    endTime: wallClockOf(raw.end),
+    locationId: count(location.location_id),
+    building: text(location.building),
+    roomNumber: text(location.room_number),
+    maxCapacity: count(location.max_capacity),
+    score: Number(raw.score ?? 0),
+    reasons: insights
+      .map(entry => String((entry as Record<string, unknown>)?.text ?? ''))
+      .filter(Boolean),
+    intervalWeeks: recurrence ? count(recurrence.interval_weeks) : null,
+    daysOfWeek: recurrence ? dates(recurrence.days_of_week) : [],
+    weeksTotal: recurrence ? count(recurrence.weeks_total) : null,
+    weeksClear: recurrence ? count(recurrence.weeks_clear) : null,
+    conflicts: recurrence ? dates(recurrence.conflicts) : [],
+    until: recurrence ? text(recurrence.until) : null,
+  };
+}
+
+export function parseScheduleRecommendations(body: unknown): ScheduleRecommendations {
+  const raw = body as Record<string, unknown>;
+  const candidates = (value: unknown): ScheduleCandidate[] =>
+    (Array.isArray(value) ? value.map(parseScheduleCandidate) : []);
+  return {
+    curatedPicks: candidates(raw.curatedPicks),
+    allOptions: candidates(raw.allOptions),
+  };
+}
+
+/**
+ * What creating a repeat sends. The recurrence keys are the ones the series
+ * planner reads, which are not the ones the scheduler route reads, so the two
+ * are written out separately rather than shared and hoped over.
+ */
+export function seriesRequestBody(request: SeriesRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    rso_id: request.rsoId,
+    title: request.title,
+    start_time: request.startTime,
+    end_time: request.endTime,
+  };
+  if (request.description !== undefined) body.description = request.description;
+  if (request.isPrivate !== undefined) body.is_private = request.isPrivate;
+  if (request.locationId !== undefined && request.locationId !== null) body.location_id = request.locationId;
+  if (request.locationText) body.location_text = request.locationText;
+
+  const recurrence: Record<string, unknown> = {
+    interval_weeks: request.recurrence.intervalWeeks,
+    days_of_week: [...request.recurrence.daysOfWeek],
+  };
+  if (request.recurrence.startsOn) recurrence.starts_on = request.recurrence.startsOn;
+  if (request.recurrence.endsOn) recurrence.ends_on = request.recurrence.endsOn;
+  body.recurrence = recurrence;
+  return body;
+}
+
+export function parseSeriesCreated(body: unknown): SeriesCreated {
+  const raw = body as Record<string, unknown>;
+  const eventIds = Array.isArray(raw.event_ids) ? raw.event_ids.map(Number) : [];
+  const skipped = Array.isArray(raw.skipped) ? raw.skipped.map(String) : [];
+  return {
+    seriesId: Number(raw.series_id),
+    eventIds,
+    created: Number(raw.created ?? eventIds.length),
+    skipped,
+  };
 }

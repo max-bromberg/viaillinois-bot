@@ -332,6 +332,39 @@ describe('pressing a button the bot posted', () => {
     expect(consumed).toEqual([]);
   });
 
+  /**
+   * A modal is the one answer Discord takes only as the first thing said, so
+   * a handler that opens one is run before the interaction is acknowledged.
+   * The form comes back as an interaction of its own, which is routed by the
+   * identifier the form was built with, exactly as a button is.
+   */
+  it('shows the form a handler answered with, rather than acknowledging first', async () => {
+    const { context, via } = testContext();
+    via.seedLink('204255221017214977', { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'editor' }] });
+    const raw = rawComponent({ customId: 'admin:form:note:10', showModal: vi.fn(async () => {}) });
+
+    await createDispatcher(context)(raw);
+
+    expect(raw.showModal).toHaveBeenCalled();
+    expect(raw.deferReply).not.toHaveBeenCalled();
+    expect(raw.deferUpdate).not.toHaveBeenCalled();
+  });
+
+  it('routes a submitted form to the handler whose prefix its identifier begins with', async () => {
+    const { context, via } = testContext();
+    via.seedLink('204255221017214977', { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'editor' }] });
+    const raw = rawComponent({
+      type: InteractionType.ModalSubmit,
+      customId: 'admin:form:note:10',
+      fields: { fields: new Map([['note', { value: 'Use the north entrance.' }]]) },
+    });
+
+    await createDispatcher(context)(raw);
+
+    const answer = (raw.editReply as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { content: string };
+    expect(answer.content).toContain('north entrance');
+  });
+
   it('routes a menu as readily as a button', async () => {
     const { context, guilds } = testContext();
     await guilds.createInstallation('900000000000000001', '204255221017214977');

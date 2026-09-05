@@ -2,11 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ApplicationCommandOptionType, ChannelType, ComponentType, GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel, InteractionContextType, InteractionType,
-  MessageFlags, PermissionFlagsBits,
+  MessageFlags, PermissionFlagsBits, TextInputStyle,
 } from 'discord.js';
 import {
-  toInteraction, toComponents, toFiles, applyReply, applyUpdate, respond, respondByUpdate,
-  answerAutocomplete, hasPermission, createDiscordActions, isMissingAccess,
+  toInteraction, toComponents, toFiles, toModal, applyReply, applyUpdate, respond, respondByUpdate,
+  answerAutocomplete, hasPermission, createDiscordActions, isMissingAccess, showModal,
   toScheduledEventInterest,
 } from '../../src/discord/adapter.ts';
 import type { Reply } from '../../src/discord/adapter.ts';
@@ -389,6 +389,63 @@ describe('answering with the components setup needs', () => {
   });
 });
 
+/**
+ * A modal is the one answer Discord will not let an application acknowledge
+ * first: it has to be the first thing said, so the work behind it happens
+ * before anything is acknowledged rather than after.
+ */
+describe('answering with a modal', () => {
+  it('turns a modal into the payload the library shows', () => {
+    expect(toModal({
+      customId: 'admin:postpone:10',
+      title: 'Move this event',
+      fields: [
+        { customId: 'start', label: 'The new start', value: '2026-09-17 18:00', required: true },
+        { customId: 'reason', label: 'Why it moved', style: 'paragraph', maxLength: 500 },
+      ],
+    })).toEqual({
+      custom_id: 'admin:postpone:10',
+      title: 'Move this event',
+      components: [
+        {
+          type: ComponentType.ActionRow,
+          components: [{
+            type: ComponentType.TextInput,
+            custom_id: 'start',
+            label: 'The new start',
+            style: TextInputStyle.Short,
+            required: true,
+            value: '2026-09-17 18:00',
+          }],
+        },
+        {
+          type: ComponentType.ActionRow,
+          components: [{
+            type: ComponentType.TextInput,
+            custom_id: 'reason',
+            label: 'Why it moved',
+            style: TextInputStyle.Paragraph,
+            required: false,
+            max_length: 500,
+          }],
+        },
+      ],
+    });
+  });
+
+  it('shows the modal rather than replying, since Discord allows only one of the two', async () => {
+    const shown: unknown[] = [];
+    const raw = {
+      deferred: false,
+      replied: false,
+      showModal: async (payload: unknown) => { shown.push(payload); },
+    };
+    await showModal(raw, { customId: 'admin:note:10', title: 'A note', fields: [] });
+    expect(shown).toHaveLength(1);
+    expect((shown[0] as Record<string, unknown>).custom_id).toBe('admin:note:10');
+  });
+});
+
 describe('answering with a file', () => {
   it('turns a calendar file into the attachment the library sends', () => {
     const files = toFiles({
@@ -516,11 +573,19 @@ describe('the actions the bot takes on its own', () => {
     const pinned: string[] = [];
     const unpinned: string[] = [];
     const scheduled: Array<Record<string, unknown>> = [];
+    const roles: Array<Record<string, unknown>> = [];
     const message = {
       id: '800000000000000001',
       edit: async (payload: Record<string, unknown>) => { edited.push(payload); },
       pin: async () => { pinned.push('800000000000000001'); },
       unpin: async () => { unpinned.push('800000000000000001'); },
+      poll: {
+        resultsFinalized: true,
+        answers: new Map([
+          [1, { text: 'Wednesday at 6 in the evening', voteCount: 7 }],
+          [2, { text: 'Thursday at 7 in the evening', voteCount: 3 }],
+        ]),
+      },
     };
     const client = {
       channels: {
@@ -537,7 +602,24 @@ describe('the actions the bot takes on its own', () => {
         fetch: async (guildId: string) => {
           if (guildId !== GUILD) throw new Error('Unknown Guild');
           return {
-            members: { me: { permissions: { bitfield: PermissionFlagsBits.ManageEvents } } },
+            members: {
+              me: { permissions: { bitfield: PermissionFlagsBits.ManageEvents } },
+              fetch: async (memberId: string) => {
+                if (memberId !== '204255221017214977') {
+                  throw Object.assign(new Error('Unknown Member'), { code: 10007 });
+                }
+                return {
+                  roles: {
+                    add: async (roleId: string) => {
+                      roles.push({ action: 'add', member: memberId, role: roleId });
+                    },
+                    remove: async (roleId: string) => {
+                      roles.push({ action: 'remove', member: memberId, role: roleId });
+                    },
+                  },
+                };
+              },
+            },
             scheduledEvents: {
               create: async (payload: Record<string, unknown>) => {
                 scheduled.push({ action: 'create', ...payload });
@@ -552,7 +634,7 @@ describe('the actions the bot takes on its own', () => {
         },
       },
     };
-    return { client, sent, edited, pinned, unpinned, scheduled };
+    return { client, sent, edited, pinned, unpinned, scheduled, roles };
   }
 
   it('posts a message with the content and the components of the answer', async () => {
@@ -645,6 +727,67 @@ describe('the actions the bot takes on its own', () => {
     const fake = fakeClient();
     const actions = createDiscordActions(fake.client as never);
     expect(await actions.permissionsIn(GUILD)).toEqual(['ManageEvents']);
+  });
+
+  it('gives a person a role and takes it away again', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    await actions.addRole(GUILD, '204255221017214977', '500000000000000001');
+    await actions.removeRole(GUILD, '204255221017214977', '500000000000000001');
+    expect(fake.roles).toEqual([
+      { action: 'add', member: '204255221017214977', role: '500000000000000001' },
+      { action: 'remove', member: '204255221017214977', role: '500000000000000001' },
+    ]);
+  });
+
+  it('answers with nothing rather than throwing for somebody who has left the server', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    expect(await actions.addRole(GUILD, '999999999999999999', '500000000000000001')).toBe(false);
+    expect(fake.roles).toEqual([]);
+  });
+
+  /**
+   * A poll is Discord's own control, so the bot posts one rather than building
+   * a row of buttons and counting presses itself. Discord takes the question,
+   * the answers and how long it runs, and answers with the message the poll
+   * sits on.
+   */
+  it('posts a native poll with the question, the answers and the hours it runs for', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    const messageId = await actions.postPoll(CHANNEL, {
+      content: 'Which evening works for the weekly meeting?',
+      question: 'Which evening works?',
+      answers: ['Wednesday at 6 in the evening', 'Thursday at 7 in the evening'],
+      durationHours: 48,
+      allowMultiselect: true,
+    });
+
+    expect(messageId).toBe('800000000000000001');
+    expect(fake.sent[0]!.content).toBe('Which evening works for the weekly meeting?');
+    expect(fake.sent[0]!.poll).toEqual({
+      question: { text: 'Which evening works?' },
+      answers: [
+        { text: 'Wednesday at 6 in the evening' },
+        { text: 'Thursday at 7 in the evening' },
+      ],
+      duration: 48,
+      allowMultiselect: true,
+    });
+  });
+
+  it('reads a poll back with the votes each answer has and whether it has closed', async () => {
+    const fake = fakeClient();
+    const actions = createDiscordActions(fake.client as never);
+    const results = await actions.readPoll(CHANNEL, '800000000000000001');
+    expect(results).toEqual({
+      finalized: true,
+      answers: [
+        { text: 'Wednesday at 6 in the evening', votes: 7 },
+        { text: 'Thursday at 7 in the evening', votes: 3 },
+      ],
+    });
   });
 
   it('tells a channel that is gone apart from any other failure', async () => {

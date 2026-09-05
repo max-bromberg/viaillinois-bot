@@ -1,5 +1,5 @@
 import {
-  outboxChangedFields, outboxEvent, outboxSeries,
+  outboxChangedFields, outboxEvent, outboxReason, outboxSeries,
   type OutboxEntry, type SeriesChange, type ViaClient, type ViaEvent,
 } from '../via/client.ts';
 import {
@@ -342,7 +342,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         entry,
         [event.eventId],
         renderEventAnnouncement(event, cardOptions),
-        isMove(changed) ? renderMoveNotice(event, changed) : null,
+        isMove(changed) ? renderMoveNotice(event, changed, outboxReason(entry)) : null,
         event,
       );
       await mirrorEvent(entry, event);

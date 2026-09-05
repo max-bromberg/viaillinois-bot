@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import {
   guildChannels, guildFeatures, guildFollowedRsos, guildInstallations, guildMessages,
+  guildRoleMappings,
 } from '../db/schema.ts';
 import { featureById, type ChannelPurpose } from '../features/registry.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
@@ -33,6 +34,14 @@ export type GuildKind = 'rso' | 'community';
 /** What the server speaks for: one organization, all of ECE, or a chosen set. */
 export type GuildBinding = 'rso' | 'all' | 'set';
 
+/**
+ * The three VIA membership roles a server can map a Discord role to. The web
+ * platform also has a global administrator, which is not a membership of any
+ * organization and is therefore not something a server maps.
+ */
+export const MAPPED_ROLES = ['member', 'editor', 'board'] as const;
+export type MappedRole = (typeof MAPPED_ROLES)[number];
+
 export interface GuildInstallation {
   guildId: string;
   /** Null until a manager has said what kind of server this is. */
@@ -52,6 +61,14 @@ export interface GuildInstallation {
   reminderLeadMinutes: number;
   /** Whether each digest is pinned and the one before it unpinned. */
   digestPinned: boolean;
+  /**
+   * The Discord account that bound this server to its organization, which the
+   * web platform confirmed was on that organization's board at the time. The
+   * daily role reconciliation reads the organization's members as this person,
+   * because reading members is board work and the bot has no identity of its
+   * own on VIA. Null until a server is bound to one organization.
+   */
+  boundBy: string | null;
   /** Whether setup has answered both of the questions that define a server. */
   isSetUp: boolean;
 }
@@ -80,6 +97,13 @@ export interface PostedMessageRef {
 export interface BindingChoice {
   binding: GuildBinding;
   rsoId?: number | null;
+  /**
+   * The Discord account the web platform confirmed may bind this server, which
+   * is a board member of that organization or a global administrator. It is
+   * written down only for a binding to one organization, because that is the
+   * only binding the web platform is asked about.
+   */
+  boundBy?: string | null;
 }
 
 /** How many rows removal deleted, so that the manager is told what went. */
@@ -130,6 +154,12 @@ export interface GuildStore {
   /** Every message the bot holds for a server, which is what removal unpins. */
   listGuildMessages(guildId: string): Promise<GuildMessage[]>;
   removeGuildMessage(guildId: string, purpose: GuildMessagePurpose): Promise<void>;
+  /** Map one VIA membership role to a Discord role in this server. */
+  setRoleMapping(guildId: string, membershipRole: MappedRole, roleId: string): Promise<void>;
+  /** Stop mapping one VIA membership role, which leaves every role already given alone. */
+  unsetRoleMapping(guildId: string, membershipRole: MappedRole): Promise<void>;
+  /** The Discord role each VIA membership role is mapped to here. */
+  listRoleMappings(guildId: string): Promise<Partial<Record<MappedRole, string>>>;
   /** Delete every row the bot holds for a server, and say what it deleted. */
   removeGuild(guildId: string): Promise<RemovedRows>;
 }
@@ -147,6 +177,7 @@ function present(row: typeof guildInstallations.$inferSelect): GuildInstallation
     digestHour: row.digestHour,
     reminderLeadMinutes: row.reminderLeadMinutes,
     digestPinned: Boolean(row.digestPinned),
+    boundBy: row.boundBy ?? null,
     isSetUp: row.kind !== null && row.binding !== null,
   };
 }
@@ -183,8 +214,15 @@ export function createGuildStore(db: BotDatabase): GuildStore {
      * ECE does not keep a stale identifier that a later reading would trust.
      */
     async setBinding(guildId, choice) {
+      const toOneRso = choice.binding === 'rso';
       await db.update(guildInstallations)
-        .set({ binding: choice.binding, rsoId: choice.binding === 'rso' ? (choice.rsoId ?? null) : null })
+        .set({
+          binding: choice.binding,
+          rsoId: toOneRso ? (choice.rsoId ?? null) : null,
+          // The board member is about the organization, so a server that is no
+          // longer bound to one holds nobody to read its members as.
+          boundBy: toOneRso ? (choice.boundBy ?? null) : null,
+        })
         .where(eq(guildInstallations.guildId, guildId));
     },
 
@@ -347,6 +385,33 @@ export function createGuildStore(db: BotDatabase): GuildStore {
       ));
     },
 
+    async setRoleMapping(guildId, membershipRole, roleId) {
+      await db.insert(guildRoleMappings)
+        .values({ guildId, membershipRole, roleId })
+        .onDuplicateKeyUpdate({ set: { roleId } });
+    },
+
+    /**
+     * Unmapping stops the bot touching that role from now on and leaves every
+     * role it has already given alone, which is the same rule as never
+     * removing a role it did not grant: what a server has handed out is the
+     * server's.
+     */
+    async unsetRoleMapping(guildId, membershipRole) {
+      await db.delete(guildRoleMappings).where(and(
+        eq(guildRoleMappings.guildId, guildId),
+        eq(guildRoleMappings.membershipRole, membershipRole),
+      ));
+    },
+
+    async listRoleMappings(guildId) {
+      const rows = await db.select().from(guildRoleMappings)
+        .where(eq(guildRoleMappings.guildId, guildId));
+      const mapped: Partial<Record<MappedRole, string>> = {};
+      for (const row of rows) mapped[row.membershipRole as MappedRole] = row.roleId;
+      return mapped;
+    },
+
     /**
      * Removal counts before it deletes, because the manager is told what went
      * and a count taken afterwards would be zero whatever was there. The three
@@ -365,6 +430,7 @@ export function createGuildStore(db: BotDatabase): GuildStore {
       await db.delete(guildChannels).where(eq(guildChannels.guildId, guildId));
       await db.delete(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId));
       await db.delete(guildMessages).where(eq(guildMessages.guildId, guildId));
+      await db.delete(guildRoleMappings).where(eq(guildRoleMappings.guildId, guildId));
       await db.delete(guildInstallations).where(eq(guildInstallations.guildId, guildId));
 
       return {

@@ -6,9 +6,12 @@ import { findViolations } from '../../scripts/check-language.js';
 import {
   setupCommand, configCommand, removeCommand, setupComponent,
   NOT_A_MANAGER_MESSAGE, GUILD_ONLY_MESSAGE, NOT_LINKED_TO_BIND_MESSAGE,
-  blockedReason, renderFeatureList, toggleFeature,
+  blockedReason, renderFeatureList, toggleFeature, CATEGORY_ORDER,
+  MAX_MESSAGE_LENGTH, MAX_ROWS,
 } from '../../src/commands/setup.ts';
-import { featureById, features, type Feature } from '../../src/features/registry.ts';
+import {
+  featureById, features, MAX_SELECT_OPTIONS, type Feature,
+} from '../../src/features/registry.ts';
 import type { Interaction, Reply, ReplySelect } from '../../src/discord/adapter.ts';
 import { interaction, testContext } from './support.ts';
 
@@ -256,13 +259,57 @@ describe('the panels, in the order setup walks through them', () => {
     expect((await guilds.getInstallation(GUILD))!.digestPinned).toBe(false);
   });
 
-  it('lists every feature the registry has, with its description and its state', async () => {
+  /**
+   * The features panel is one page per category, because the registry has more
+   * features than Discord will carry in one message or offer in one menu. The
+   * page lists the features of that category a line each, and what each of
+   * them does is on the menu entry that switches it, which is where Discord
+   * has room for it.
+   */
+  it('opens the features panel on the commands, and lists every command feature with its state', async () => {
     const { context } = await started();
     const reply = await setupComponent.run(press('setup:step:features'), context);
-    expect(reply.content.toLowerCase()).toContain('command');
-    for (const feature of features) {
-      expect(reply.content).toContain(feature.description.slice(0, 24));
+
+    expect(reply.content).toContain('Step 4 of 5');
+    expect(reply.content).toContain('Commands');
+    for (const feature of features.filter(f => f.category === 'command')) {
+      expect(reply.content).toContain(feature.id);
     }
+    for (const feature of features.filter(f => f.category === 'proactive')) {
+      expect(reply.content).not.toContain(feature.id);
+    }
+  });
+
+  it('offers every category as a page of its own', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(press('setup:step:features'), context);
+    expect(selectIn(reply, 'setup:category')!.options!.map(option => option.value))
+      .toEqual(['command', 'proactive', 'roles', 'administration']);
+  });
+
+  it('turns to the page a manager chose, and offers only that page features to switch', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(choose('setup:category', ['proactive']), context);
+
+    expect(reply.content).toContain('Proactive posts');
+    const inCategory = features.filter(f => f.category === 'proactive').map(f => f.id);
+    expect(selectIn(reply, 'setup:feature')!.options!.map(option => option.value)).toEqual(inCategory);
+  });
+
+  it('says what each feature does on the menu entry that switches it', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(press('setup:step:features'), context);
+    const options = selectIn(reply, 'setup:feature')!.options!;
+    for (const option of options) {
+      expect(option.description).toBe(featureById(option.value).summary);
+    }
+  });
+
+  it('stays on the page a feature belongs to when that feature is switched', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(choose('setup:feature', ['announce.new']), context);
+    expect(reply.content).toContain('Proactive posts');
+    expect(reply.content).toContain('announce.new');
   });
 
   it('switches a feature off and back on again', async () => {
@@ -325,6 +372,19 @@ describe('binding a server to one organization', () => {
     expect(reply.content).toContain('IEEE');
   });
 
+  /**
+   * The web platform has just confirmed that this person is on that board, and
+   * reading the organization's members is board work, so the server writes
+   * down who bound it and the daily role reconciliation reads the members as
+   * that person.
+   */
+  it('writes down the board member VIA confirmed, so that the members can be read later', async () => {
+    const { context, guilds, via } = await started();
+    via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'board' }] });
+    await setupComponent.run(choose('setup:bindrso', ['1']), context);
+    expect((await guilds.getInstallation(GUILD))!.boundBy).toBe(ROSA);
+  });
+
   it('binds it for a VIA global administrator, whatever board they sit on', async () => {
     const { context, guilds, via } = await started();
     via.seedLink(ROSA, { isGlobalAdmin: true, memberships: [] });
@@ -384,6 +444,7 @@ describe('a feature that cannot work', () => {
     ...featureById('events.list'),
     id: 'announce.new',
     description: 'Announce a new event in the channel bound to announcements.',
+    summary: 'Announce a new event in the announcements channel.',
     category: 'proactive',
     defaultEnabled: false,
     channelPurposes: ['announcements'],
@@ -426,22 +487,23 @@ describe('a feature that cannot work', () => {
       enabled: { 'announce.new': false },
       channels: {},
       permissions: [],
+      category: 'proactive',
     });
     expect(panel.content).toContain('no channel is bound');
-    expect(panel.content).toContain('Announce a new event');
+    expect(panel.content).toContain('announce.new');
   });
 
-  it('groups the panel by category and says whether each feature is on', () => {
+  it('names the category the page is showing and says whether each feature on it is on', () => {
     const panel = renderFeatureList({
       features: [featureById('events.list'), proactive],
       enabled: { 'events.list': true, 'announce.new': false },
       channels: allowed.channels,
       permissions: allowed.permissions,
+      category: 'command',
     });
-    expect(panel.content.toLowerCase()).toContain('command');
-    expect(panel.content.toLowerCase()).toContain('proactive');
-    expect(panel.content).toContain('on');
-    expect(panel.content).toContain('off');
+    expect(panel.content).toContain('Commands');
+    expect(panel.content).toContain('on: events.list');
+    expect(panel.content).not.toContain('announce.new');
   });
 
   it('refuses to switch on a feature that cannot work, and says what is missing', async () => {
@@ -534,6 +596,75 @@ describe('removing the bot from a server', () => {
     });
     expect(cleared).toEqual([GUILD]);
     expect(reply.content).toContain('3 scheduled events');
+  });
+});
+
+/**
+ * Discord refuses a message over two thousand characters and a menu over
+ * twenty five options outright, and a panel that grows past either one is a
+ * panel nobody can open. The registry is what grows, so the claim is made
+ * against the whole registry rather than against a handful of features.
+ */
+describe('what Discord will carry', () => {
+  const GUILD_STATE = {
+    channels: {} as Record<string, string>,
+    permissions: [] as never[],
+  };
+
+  function panels(): Reply[] {
+    const enabled: Record<string, boolean> = {};
+    return CATEGORY_ORDER.map(category => renderFeatureList({
+      features,
+      enabled,
+      channels: GUILD_STATE.channels,
+      permissions: GUILD_STATE.permissions,
+      category,
+    }));
+  }
+
+  it('keeps every page of the features panel inside the message Discord will carry', () => {
+    for (const panel of panels()) {
+      expect(panel.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    }
+  });
+
+  it('keeps every menu on every panel inside the options Discord will offer', () => {
+    for (const panel of panels()) {
+      for (const row of panel.components ?? []) {
+        for (const component of row.components) {
+          if (component.kind !== 'select') continue;
+          expect((component.options ?? []).length).toBeLessThanOrEqual(MAX_SELECT_OPTIONS);
+        }
+      }
+    }
+  });
+
+  it('keeps every panel of the whole walk inside both limits, with the full registry', async () => {
+    const { context, guilds } = testContext();
+    await guilds.createInstallation(GUILD, ROSA);
+
+    const walked: Reply[] = [
+      await setupCommand.run(manager(), context),
+      await configCommand.run(manager({ commandName: 'via config' }), context),
+      await setupComponent.run(press('setup:step:kind'), context),
+      await setupComponent.run(press('setup:step:binding'), context),
+      await setupComponent.run(press('setup:step:channels'), context),
+      await setupComponent.run(press('setup:step:features'), context),
+      await setupComponent.run(press('setup:step:timing'), context),
+      ...await Promise.all(CATEGORY_ORDER.map(category =>
+        setupComponent.run(choose('setup:category', [category]), context))),
+    ];
+
+    for (const panel of walked) {
+      expect(panel.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+      expect((panel.components ?? []).length).toBeLessThanOrEqual(MAX_ROWS);
+      for (const row of panel.components ?? []) {
+        for (const component of row.components) {
+          if (component.kind !== 'select') continue;
+          expect((component.options ?? []).length).toBeLessThanOrEqual(MAX_SELECT_OPTIONS);
+        }
+      }
+    }
   });
 });
 

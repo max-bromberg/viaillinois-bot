@@ -1,4 +1,8 @@
-import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.ts';
+import type {
+  AutocompleteChoice, Interaction, PollDraft, Reply,
+} from '../discord/adapter.ts';
+import type { EventMirrors } from '../mirror/eventMirrors.ts';
+import type { SchedulerPolls } from '../scheduler/polls.ts';
 import type { ViaClient } from '../via/client.ts';
 import type { GuildStore } from '../guilds/store.ts';
 import type { RateWindows } from '../ratelimit/windows.ts';
@@ -37,6 +41,24 @@ export interface CommandContext {
   /** Send one direct message, which only ever goes to a linked person. */
   sendDirectMessage: (discordUserId: string, content: string) => Promise<void>;
   /**
+   * Post one message into a channel and answer with the identifier it left
+   * behind. Two things a person asks for post rather than answer: an
+   * announcement posted again, and a poll opened in a channel the board
+   * picked. Both are the same seam the proactive features use, narrowed to
+   * the one call a command makes.
+   */
+  postMessage?: (channelId: string, reply: Reply) => Promise<string>;
+  /** Post one of Discord's own polls, which is what the scheduler opens. */
+  postPoll?: (channelId: string, poll: PollDraft) => Promise<string>;
+  /**
+   * Write down where the announcement of an event now is, so that a later
+   * change edits the message people are actually reading. Only the part of
+   * Event_Mirrors a command touches is here.
+   */
+  mirrors?: Pick<EventMirrors, 'recordAnnouncement'>;
+  /** The polls the scheduler opened, which the poll and its result are written to. */
+  polls?: SchedulerPolls;
+  /**
    * Run work after the person has been answered. Waiting for a link takes up
    * to a minute, and Discord is owed an answer in three seconds, so the wait
    * happens here rather than inside the answer.
@@ -59,6 +81,12 @@ export interface CommandHandler {
   name: string;
   /** Whether only the person who asked sees the answer. */
   ephemeral: boolean;
+  /**
+   * Whether this command can answer with a form rather than a message.
+   * Discord takes a form only as the first thing said about an interaction,
+   * so a command that may open one is run before anything is acknowledged.
+   */
+  opensModal?: boolean;
   run(interaction: Interaction, context: CommandContext): Promise<Reply>;
   /**
    * The completions Discord shows while a person is still typing an option.
@@ -86,6 +114,12 @@ export interface ComponentHandler {
   updateInPlace?: boolean;
   /** Whether only the person who pressed it sees the answer, when it is a new message. */
   ephemeral?: boolean;
+  /**
+   * Whether this handler can answer with a form. A handler that may is run
+   * before the interaction is acknowledged, because Discord takes a form only
+   * as the first thing said about one.
+   */
+  opensModal?: boolean;
   run(interaction: Interaction, context: CommandContext): Promise<Reply>;
 }
 

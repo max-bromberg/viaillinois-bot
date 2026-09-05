@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
 import {
   ViaError, parseBuilding, parseCourses, parseEvent, parseLinkSession, parseLinkedAccount,
-  parseLocations, parseMidterms, parseOutboxEntry, parsePersonalCalendar, parseRsos,
-  type ViaClient, type Building, type CampusLocation, type Course, type EventPage,
-  type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer, type InterestSignal,
-  type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery, type OutboxEntry,
-  type OutboxPage, type OutboxQuery, type PersonalCalendar, type Rso, type RsoWithEvents,
-  type ViaEvent,
+  parseLocations, parseMidterms, parseOutboxEntry, parsePersonalCalendar, parseRsoMembers,
+  parseRsos, parseScheduleRecommendations,
+  type ViaClient, type Building, type CampusLocation, type Course, type EventChanges,
+  type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer,
+  type InterestSignal, type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery,
+  type OutboxEntry, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement,
+  type Rso, type RsoMember, type RsoWithEvents, type ScheduleRecommendations, type ScheduleRequest,
+  type SeriesCreated, type SeriesRequest, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -68,6 +70,10 @@ const RECORDED_COURSE = parseCourses(fixture('courses.json'))[0]!;
 const RECORDED_LOCATION = parseLocations(fixture('locations.json'))[0]!;
 /** The recorded building, whose code and name every building answer follows. */
 const RECORDED_BUILDING = parseBuilding(fixture('building.json'));
+/** The recorded member, which is who the fake lists until a test seeds more. */
+const RECORDED_MEMBER = parseRsoMembers(fixture('rsoMembers.json'))[0]!;
+/** The recorded recommendation, which the fake answers the scheduler with. */
+const RECORDED_RECOMMENDATIONS = parseScheduleRecommendations(fixture('scheduler.recommend.json'));
 
 /**
  * One recorded entry per outbox kind, as the web platform writes them. A test
@@ -99,6 +105,12 @@ export interface RecordedInterest {
   interested: boolean;
   actingDiscordUserId?: string;
   discordUserId?: string;
+}
+
+/** One postponement the fake was given, as it was given. */
+export interface RecordedPostponement {
+  eventId: number;
+  reason: string | null;
 }
 
 /** One person's calendar, as the fake holds it. */
@@ -157,6 +169,18 @@ export interface FakeViaClient extends ViaClient {
    * command needs is a room that is free and a room that is not.
    */
   occupyRoom(locationId: number): void;
+  /** Every postponement the fake was given, in order, with the reason it carried. */
+  readonly postponements: RecordedPostponement[];
+  /** Every question the scheduler was asked, in order. */
+  readonly scheduleRequests: ScheduleRequest[];
+  /** Every repeat the fake was asked to create, in order. */
+  readonly seriesRequests: SeriesRequest[];
+  /** Replace what the scheduler answers, for a test about an answer that has changed. */
+  seedRecommendations(answer: ScheduleRecommendations): void;
+  /** Add or replace a member of an organization, filling anything unnamed from the recorded one. */
+  seedMember(rsoId: number, overrides?: Partial<RsoMember>): RsoMember;
+  /** Forget every member of an organization, for a test about a board nobody is on. */
+  clearMembers(rsoId: number): void;
   /** Whether the web platform answers its health endpoint. */
   setHealthy(healthy: boolean): void;
   /** Make the next call, whichever it is, throw the given error. */
@@ -187,7 +211,16 @@ export function createFakeViaClient(): FakeViaClient {
   const locations = new Map<number, CampusLocation>([[RECORDED_LOCATION.locationId, { ...RECORDED_LOCATION }]]);
   const buildings = new Map<string, Building>([[RECORDED_BUILDING.code, { ...RECORDED_BUILDING }]]);
   const occupied = new Set<number>();
+  const members = new Map<number, Map<string, RsoMember>>([
+    [1, new Map([[RECORDED_MEMBER.netId, { ...RECORDED_MEMBER }]])],
+  ]);
+  const postponements: RecordedPostponement[] = [];
+  const scheduleRequests: ScheduleRequest[] = [];
+  const seriesRequests: SeriesRequest[] = [];
+  let recommendations: ScheduleRecommendations = RECORDED_RECOMMENDATIONS;
   let healthy = true;
+  let nextEventId = 1000;
+  let nextSeriesId = 100;
   let nextFailure: Error | null = null;
   let sessionCounter = 0;
   let calendarCounter = 0;
@@ -232,6 +265,80 @@ export function createFakeViaClient(): FakeViaClient {
       .filter(event => !query.from || instantOf(event.startTime) >= instantOf(`${query.from}T00:00:00-05:00`))
       .filter(event => !query.to || instantOf(event.startTime) <= instantOf(`${query.to}T23:59:59-05:00`))
       .sort((left, right) => instantOf(left.startTime) - instantOf(right.startTime));
+  }
+
+  /**
+   * Who may act on an organization's events, which is the rule the web
+   * platform applies rather than a shape it sends. An editor or a board member
+   * of that organization may, a global administrator may everywhere, and
+   * anybody else is refused with the code the bot branches on.
+   */
+  function requireEditor(rsoId: number, actingDiscordUserId: string): void {
+    const seeded = links.get(actingDiscordUserId);
+    if (!seeded) {
+      throw new ViaError('This Discord account is not linked to a VIA account.', 403, 'not_linked');
+    }
+    if (seeded.account.isGlobalAdmin) return;
+    const allowed = seeded.account.memberships.some(membership =>
+      membership.rsoId === rsoId
+      && (membership.role === 'editor' || membership.role === 'board' || membership.role === 'admin'));
+    if (!allowed) {
+      throw new ViaError(
+        'You are not an editor of that organization, so you cannot change its events.',
+        403,
+        'forbidden',
+      );
+    }
+  }
+
+  /** Reading an organization's members is board work, which is a narrower rule. */
+  function requireBoard(rsoId: number, actingDiscordUserId: string): void {
+    const seeded = links.get(actingDiscordUserId);
+    if (!seeded) {
+      throw new ViaError('This Discord account is not linked to a VIA account.', 403, 'not_linked');
+    }
+    if (seeded.account.isGlobalAdmin) return;
+    const allowed = seeded.account.memberships.some(membership =>
+      membership.rsoId === rsoId && (membership.role === 'board' || membership.role === 'admin'));
+    if (!allowed) {
+      throw new ViaError(
+        'You are not on the board of that organization, so you cannot read its members.',
+        403,
+        'forbidden',
+      );
+    }
+  }
+
+  /**
+   * A time an acting call carries, in the shape the web platform's own wall
+   * clock reader takes: a date and a time, with the seconds optional, written
+   * back with the seconds it stores. The reading endpoints parse dates more
+   * narrowly, which is why this is a reader of its own rather than the one
+   * above.
+   */
+  const ACTING_WALL_CLOCK = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/;
+
+  function actingWallClock(raw: string): string {
+    const text = String(raw ?? '').trim();
+    if (!ACTING_WALL_CLOCK.test(text)) {
+      throw new ViaError(
+        'Each time has to be written as a date and a time, such as 2026-09-17 18:00.',
+        400,
+        'invalid',
+      );
+    }
+    const normalized = text.replace('T', ' ');
+    return normalized.length === 16 ? `${normalized}:00` : normalized;
+  }
+
+  /** The event an acting call names, or the refusal that says it is not there. */
+  function eventFor(eventId: number, actingDiscordUserId: string): ViaEvent {
+    const event = events.get(eventId);
+    if (!event) {
+      throw new ViaError('There is no event with that identifier.', 404, 'not_found');
+    }
+    requireEditor(event.rsoId, actingDiscordUserId);
+    return event;
   }
 
   /**
@@ -343,6 +450,25 @@ export function createFakeViaClient(): FakeViaClient {
       occupied.add(locationId);
     },
 
+    postponements,
+    scheduleRequests,
+    seriesRequests,
+
+    seedRecommendations(answer) {
+      recommendations = answer;
+    },
+
+    seedMember(rsoId, overrides = {}) {
+      const member: RsoMember = { ...RECORDED_MEMBER, ...overrides };
+      if (!members.has(rsoId)) members.set(rsoId, new Map());
+      members.get(rsoId)!.set(member.netId, member);
+      return member;
+    },
+
+    clearMembers(rsoId) {
+      members.set(rsoId, new Map());
+    },
+
     clearRsos() {
       rsos.clear();
     },
@@ -408,6 +534,14 @@ export function createFakeViaClient(): FakeViaClient {
       buildings.clear();
       buildings.set(RECORDED_BUILDING.code, { ...RECORDED_BUILDING });
       occupied.clear();
+      members.clear();
+      members.set(1, new Map([[RECORDED_MEMBER.netId, { ...RECORDED_MEMBER }]]));
+      postponements.length = 0;
+      scheduleRequests.length = 0;
+      seriesRequests.length = 0;
+      recommendations = RECORDED_RECOMMENDATIONS;
+      nextEventId = 1000;
+      nextSeriesId = 100;
     },
 
     async openLinkSession(discordUserId) {
@@ -698,6 +832,140 @@ export function createFakeViaClient(): FakeViaClient {
       calls.push('getBuilding');
       const held = buildings.get(code.trim().toUpperCase());
       return held ? { ...held } : null;
+    },
+
+    /**
+     * The acting endpoints. Each of them applies the web platform's rule about
+     * who may act and then changes the event the fake holds, so a command test
+     * can read the event back and see what the person's action did.
+     */
+    async postponeEvent(eventId: number, postponement: Postponement, actingDiscordUserId: string) {
+      throwIfInstructed();
+      calls.push('postponeEvent');
+      const event = eventFor(eventId, actingDiscordUserId);
+      const start = actingWallClock(postponement.startTime);
+      const end = actingWallClock(postponement.endTime);
+      if (end <= start) {
+        throw new ViaError('The end time has to come after the start time.', 400, 'invalid');
+      }
+      event.startTime = start;
+      event.endTime = end;
+      postponements.push({ eventId, reason: (postponement.reason ?? '').trim() || null });
+      return { ...event };
+    },
+
+    async cancelEvent(eventId: number, actingDiscordUserId: string) {
+      throwIfInstructed();
+      calls.push('cancelEvent');
+      const event = eventFor(eventId, actingDiscordUserId);
+      event.cancelledAt = '2026-09-05T12:00:00-05:00';
+      return event.cancelledAt;
+    },
+
+    async patchEvent(eventId: number, changes: EventChanges, actingDiscordUserId: string) {
+      throwIfInstructed();
+      calls.push('patchEvent');
+      const event = eventFor(eventId, actingDiscordUserId);
+      if ('description' in changes) event.description = changes.description ?? null;
+      if ('isPrivate' in changes) event.isPrivate = Boolean(changes.isPrivate);
+      if ('locationNote' in changes) event.locationNote = changes.locationNote ?? null;
+      return { ...event };
+    },
+
+    /**
+     * The recorded recommendation, for an editor of the organization the
+     * request names. What the scheduler weighs is the web platform's, and a
+     * fake that weighed it differently would be a second scheduler to keep in
+     * step with the first.
+     */
+    async recommendSchedule(
+      request: ScheduleRequest,
+      actingDiscordUserId: string,
+    ): Promise<ScheduleRecommendations> {
+      throwIfInstructed();
+      calls.push('recommendSchedule');
+      requireEditor(request.rsoId, actingDiscordUserId);
+      scheduleRequests.push(request);
+      return {
+        curatedPicks: recommendations.curatedPicks.map(pick => ({ ...pick })),
+        allOptions: recommendations.allOptions.map(option => ({ ...option })),
+      };
+    },
+
+    /**
+     * A repeat, expanded weekly from the first meeting to the end date, which
+     * is enough of what the web platform's own planner does for a command to
+     * be tested against the events it leaves behind.
+     */
+    async createEventSeries(
+      request: SeriesRequest,
+      actingDiscordUserId: string,
+    ): Promise<SeriesCreated> {
+      throwIfInstructed();
+      calls.push('createEventSeries');
+      requireEditor(request.rsoId, actingDiscordUserId);
+      seriesRequests.push(request);
+
+      const start = actingWallClock(request.startTime);
+      const end = actingWallClock(request.endTime);
+      if (end <= start) {
+        throw new ViaError('The end time has to be after the start time.', 400, 'invalid');
+      }
+
+      const endsOn = request.recurrence.endsOn ?? start.slice(0, 10);
+      const everyDays = 7 * Math.max(1, request.recurrence.intervalWeeks);
+      const day = (value: string, plus: number) =>
+        new Date(Date.parse(`${value}T12:00:00Z`) + plus * 86_400_000).toISOString().slice(0, 10);
+
+      const seriesId = (nextSeriesId += 1);
+      const eventIds: number[] = [];
+      for (let date = start.slice(0, 10); date <= endsOn; date = day(date, everyDays)) {
+        const eventId = (nextEventId += 1);
+        const rso = rsos.get(request.rsoId);
+        const location = request.locationId === undefined || request.locationId === null
+          ? null
+          : locations.get(request.locationId) ?? null;
+        events.set(eventId, {
+          ...RECORDED_EVENT,
+          eventId,
+          rsoId: request.rsoId,
+          rsoName: rso?.name ?? null,
+          title: request.title,
+          description: request.description ?? null,
+          startTime: `${date} ${start.slice(11)}`,
+          endTime: `${date} ${end.slice(11)}`,
+          isPrivate: Boolean(request.isPrivate),
+          cancelledAt: null,
+          locationId: location?.locationId ?? null,
+          building: location?.building ?? null,
+          roomNumber: location?.roomNumber ?? null,
+          locationText: request.locationText ?? null,
+          locationNote: null,
+          seriesId,
+          seriesFrequency: 'weekly',
+          seriesIntervalWeeks: request.recurrence.intervalWeeks,
+          seriesDaysOfWeek: [...request.recurrence.daysOfWeek].join(','),
+          seriesEndsOn: endsOn,
+          interestCount: 0,
+        });
+        eventIds.push(eventId);
+      }
+
+      if (eventIds.length === 0) {
+        throw new ViaError(
+          'That repeat produces no events. Check the days of the week and the end date.',
+          400,
+          'invalid',
+        );
+      }
+      return { seriesId, eventIds, created: eventIds.length, skipped: [] };
+    },
+
+    async listRsoMembers(rsoId: number, actingDiscordUserId: string): Promise<RsoMember[]> {
+      throwIfInstructed();
+      calls.push('listRsoMembers');
+      requireBoard(rsoId, actingDiscordUserId);
+      return [...(members.get(rsoId)?.values() ?? [])].map(member => ({ ...member }));
     },
 
     async health() {

@@ -6,6 +6,7 @@ import { db, pool } from './db/client.ts';
 import { currentVersion } from './db/migrate.ts';
 import { createViaHttpClient } from './via/http.ts';
 import { withHotReadCache } from './via/cache.ts';
+import { createNetIdDirectory, withNetIdDirectory } from './roles/directory.ts';
 import { createGateway } from './discord/client.ts';
 import { createGuildStore } from './guilds/store.ts';
 import { createGuildLifecycle } from './guilds/lifecycle.ts';
@@ -24,6 +25,7 @@ import { createScheduledEventMirror } from './mirror/scheduledEvents.ts';
 import { createInterestRecorder } from './mirror/interest.ts';
 import { createAnnouncementHandlers } from './announce/handlers.ts';
 import { createMidtermHandlers } from './announce/midterms.ts';
+import { createMembershipHandlers } from './announce/membership.ts';
 import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
@@ -36,6 +38,12 @@ import { createGuildDigestJob } from './jobs/guildDigest.ts';
 import { createDayOfReminderJob } from './jobs/dayOfReminders.ts';
 import { createExamReminderJob } from './jobs/examReminders.ts';
 import { createGuildExamsJob } from './jobs/guildExams.ts';
+import { createPollClosingJob } from './jobs/schedulerPolls.ts';
+import { createRoleReconciliationJob } from './jobs/roleReconcile.ts';
+import { createRoleGrants } from './roles/grants.ts';
+import { createMembershipRoles } from './roles/membership.ts';
+import { registerLinkedRoleMetadata } from './roles/linked.ts';
+import { createSchedulerPolls } from './scheduler/polls.ts';
 
 /**
  * The bot's entry point, which is the one place everything is wired together.
@@ -52,17 +60,32 @@ import { createGuildExamsJob } from './jobs/guildExams.ts';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
+/**
+ * The campus hour the membership roles are reconciled at, which is early
+ * enough to be done before anybody reads a channel and late enough that a
+ * membership changed the evening before is already in the outbox.
+ */
+const ROLE_RECONCILE_HOUR = 5;
+
 const config = loadConfig();
+
+/**
+ * Who a NetID is, for an hour at a time and in memory only. The bot stores no
+ * NetID, so this is what lets a membership entry, which names a person by
+ * NetID, reach the Discord account a role is given to. It is filled by the
+ * link lookups the bot already makes, which is what the wrapper below does.
+ */
+const netIds = createNetIdDirectory();
 
 /**
  * The web platform client, with the two hot reads cached for a minute. The
  * cache sits outside the HTTP client so that everything past this line, the
  * commands and the autocomplete alike, reads through it.
  */
-const via = withHotReadCache(createViaHttpClient({
+const via = withHotReadCache(withNetIdDirectory(createViaHttpClient({
   baseUrl: config.viaInternalUrl,
   serviceToken: config.botServiceToken,
-}));
+}), netIds));
 
 const guilds = createGuildStore(db);
 const feed = createFeedStore(db);
@@ -71,6 +94,8 @@ const deliveries = createDeliveries(db);
 const mirrors = createEventMirrors(db);
 const cursors = createOutboxCursors(db);
 const jobRuns = createJobRuns(db);
+const grants = createRoleGrants(db);
+const polls = createSchedulerPolls(db);
 
 const rateWindows = createRateWindows({ db, limits: config.rateLimits });
 
@@ -115,6 +140,13 @@ const scheduledEvents = createScheduledEventMirror({
 const recordInterest = createInterestRecorder({ via, mirrors });
 
 /**
+ * The membership roles a server maps, kept in step by the outbox as
+ * memberships change and by the daily reconciliation for everybody the outbox
+ * could not name at the time.
+ */
+const membershipRoles = createMembershipRoles({ guilds, grants, actions, disable });
+
+/**
  * The living this week message, which two things bring up to date: the hourly
  * job below, so that an event which has happened leaves the list, and the
  * outbox handlers, so that a meeting moved at nine in the morning is right in
@@ -144,6 +176,7 @@ const consumer = createOutboxConsumer({
       thisWeek,
     }),
     ...createMidtermHandlers({ feed, deliveries, deliver: deliverDirectMessage }),
+    ...createMembershipHandlers({ guilds, roles: membershipRoles, directory: netIds }),
   },
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.
@@ -176,6 +209,11 @@ const dayOfReminders = createDayOfReminderJob({
   guilds, deliveries, actions, via, disable, websiteUrl: config.viaPublicUrl,
 });
 
+const closingPolls = createPollClosingJob({ polls, actions });
+const roleReconciliation = createRoleReconciliationJob({
+  guilds, roles: membershipRoles, grants, directory: netIds, via,
+});
+
 const scheduler = createJobScheduler({
   runs: jobRuns,
   jobs: [
@@ -186,6 +224,23 @@ const scheduler = createJobScheduler({
     { name: 'personal.reminders', cadence: 'tick', async run(hour) { await personalReminders.run(hour); } },
     { name: 'guild.dayof', cadence: 'tick', async run(hour) { await dayOfReminders.run(hour); } },
     { name: 'personal.exams', cadence: 'tick', async run(hour) { await examReminders.run(hour); } },
+    // A poll closes at an hour Discord decides rather than one the campus
+    // clock does, and Discord sends no event to say so, so the bot looks on
+    // every pass for the polls whose time is up.
+    { name: 'scheduler.polls', cadence: 'tick', async run(hour) { await closingPolls.run(hour); } },
+    // The roles are reconciled once a day, at the hour the design names, and
+    // the hourly cadence is what makes a bot that was down over it catch up.
+    {
+      name: 'roles.reconcile',
+      async run(hour) {
+        if (hour.hour !== ROLE_RECONCILE_HOUR) return;
+        const report = await roleReconciliation.run(hour);
+        console.log(
+          `via-bot: reconciled the roles of ${report.servers} servers, `
+          + `${report.people} people, ${report.unresolved} left for another day`,
+        );
+      },
+    },
   ],
 });
 
@@ -195,6 +250,10 @@ const dispatch = createDispatcher({
   feed,
   websiteUrl: config.viaPublicUrl,
   rateWindows,
+  polls,
+  mirrors,
+  postMessage: (channelId, reply) => actions.postMessage(channelId, reply),
+  postPoll: (channelId, poll) => actions.postPoll(channelId, poll),
   deleteLocalData: discordUserId => deleteLocalData(db, discordUserId),
   removeGuildPresence: guildId => scheduledEvents.removeGuildPresence(guildId),
   sendDirectMessage: async (discordUserId, content) => {
@@ -220,13 +279,26 @@ const health = await startHealthServer({
 
 console.log(`via-bot ${version}: health listening on port ${health.port}`);
 
+const rest = new REST({ version: '10' }).setToken(config.discordToken);
+
 const commands = buildCommands();
 const registered = await putCommands({
-  rest: new REST({ version: '10' }).setToken(config.discordToken),
+  rest,
   applicationId: config.discordApplicationId,
   commands,
 });
 console.log(`via-bot: registered ${registered} application commands`);
+
+/**
+ * The facts a server can require for a role of its own. Registering them is
+ * the bot's whole part in linked roles: the values themselves are pushed by
+ * the web platform, which holds the Discord authorization from the link flow.
+ */
+const facts = await registerLinkedRoleMetadata({
+  rest,
+  applicationId: config.discordApplicationId,
+});
+console.log(`via-bot: registered ${facts} linked role facts`);
 
 await gateway.login();
 

@@ -165,3 +165,41 @@ The web platform's building code table is the authority on what a code stands fo
 bot asks it rather than keeping a second copy of the names that would drift. What the bot
 keeps is the list of codes themselves, so that the building option has something to offer
 before anything has been typed; everything after that comes from the rooms VIA knows.
+
+## 2026-09-05: A poll is closed by the clock rather than by a gateway event
+
+Discord sends no event of its own when a poll ends. The one signal near it is the message
+being edited as the counts are finalized, and receiving that would mean asking the gateway
+for every message in every server the bot is in, which is a great deal of other people's
+conversation to receive in order to learn one thing about one message. So the bot writes
+down the hour each poll runs to, in Scheduler_Polls, and reads the result then. That needs
+no further intent, and it survives a restart in the middle of a poll, which a gateway
+event would not.
+
+## 2026-09-05: The administrative buttons are on the card a person opened, not on the announcement
+
+Section 6.7 asks for the administrative actions as buttons on the event card and on the
+announcement, shown only when the viewer is linked. Discord has no way to show one person
+a button and another person nothing on a message a whole channel reads. So an announcement
+carries one button that opens the card privately for whoever pressed it, and that card
+carries the six actions. The refusals are unchanged: whoever presses one is answered by
+the web platform's decision about them.
+
+## 2026-09-05: Re-posting an announcement reads the acting person's memberships
+
+Every other administrative action proves editorship by being refused, because each of them
+writes to VIA. Re-posting writes nothing, and the internal service API has no endpoint
+that answers whether a person may act, so this one action compares the memberships the web
+platform sends for that account and refuses with the same code and the same sentence the
+others do. It is the only comparison of its kind in the bot. The web platform should grow
+an endpoint that answers it, and this should call that instead when it does.
+
+## 2026-09-05: A membership entry the bot cannot resolve is skipped rather than guessed at
+
+A `membership.changed` entry names a person by NetID, and the bot stores no NetID: it holds
+Discord identifiers and asks the web platform who somebody is. Links resolve from a Discord
+account to a NetID and not the other way, so a NetID the bot has not seen recently cannot
+be turned into a Discord account at all. Those people are skipped, with a line in the log,
+and the daily reconciliation puts them right once they have used the bot and the in memory
+directory has learned who they are.
+

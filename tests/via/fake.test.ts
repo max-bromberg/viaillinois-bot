@@ -507,4 +507,136 @@ describe('the campus lookups through the fake', () => {
     });
     expect(await via.getBuilding('ZZZ')).toBe(null);
   });
+
+  /**
+   * The acting endpoints, and the one rule behind all of them: the web
+   * platform decides who may act on an organization's events, from the
+   * memberships it holds. The fake applies the rule rather than the spelling,
+   * because what a command has to handle is the refusal.
+   */
+  describe('acting on an event', () => {
+    const ROSA = '204255221017214977';
+
+    function editor() {
+      const via = createFakeViaClient();
+      via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'editor' }] });
+      return via;
+    }
+
+    it('refuses a Discord account with no VIA account', async () => {
+      const via = createFakeViaClient();
+      const failure = await via.cancelEvent(10, ROSA).then(() => null, (err: unknown) => err);
+      expect((failure as ViaError).code).toBe('not_linked');
+    });
+
+    it('refuses a linked person who is only a member of that organization', async () => {
+      const via = createFakeViaClient();
+      via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'member' }] });
+      const failure = await via.cancelEvent(10, ROSA).then(() => null, (err: unknown) => err);
+      expect((failure as ViaError).code).toBe('forbidden');
+    });
+
+    it('lets a global administrator act on any organization events', async () => {
+      const via = createFakeViaClient();
+      via.seedLink(ROSA, { isGlobalAdmin: true, memberships: [] });
+      expect(await via.cancelEvent(10, ROSA)).not.toBe(null);
+    });
+
+    it('moves an event to a new time and answers with the event as it now stands', async () => {
+      const via = editor();
+      const event = await via.postponeEvent(10, {
+        startTime: '2026-09-17 18:00:00',
+        endTime: '2026-09-17 19:00:00',
+        reason: 'The room flooded.',
+      }, ROSA);
+
+      expect(event!.startTime).toBe('2026-09-17 18:00:00');
+      expect((await via.getEvent(10))!.endTime).toBe('2026-09-17 19:00:00');
+      expect(via.postponements).toEqual([{ eventId: 10, reason: 'The room flooded.' }]);
+    });
+
+    it('refuses a postponement that ends before it begins, as the web platform does', async () => {
+      const via = editor();
+      const failure = await via.postponeEvent(10, {
+        startTime: '2026-09-17 19:00:00',
+        endTime: '2026-09-17 18:00:00',
+      }, ROSA).then(() => null, (err: unknown) => err);
+      expect((failure as ViaError).code).toBe('invalid');
+    });
+
+    it('cancels an event and marks it cancelled from then on', async () => {
+      const via = editor();
+      expect(await via.cancelEvent(10, ROSA)).not.toBe(null);
+      expect((await via.getEvent(10))!.cancelledAt).not.toBe(null);
+    });
+
+    it('changes only the fields a request named', async () => {
+      const via = editor();
+      const before = (await via.getEvent(10))!;
+      const after = await via.patchEvent(10, { locationNote: 'Use the north entrance.' }, ROSA);
+      expect(after!.locationNote).toBe('Use the north entrance.');
+      expect(after!.description).toBe(before.description);
+    });
+
+    it('switches an event between public and internal', async () => {
+      const via = editor();
+      const after = await via.patchEvent(10, { isPrivate: true }, ROSA);
+      expect(after!.isPrivate).toBe(true);
+    });
+
+    it('answers with nothing about an event VIA does not have', async () => {
+      const via = editor();
+      const failure = await via.cancelEvent(999, ROSA).then(() => null, (err: unknown) => err);
+      expect((failure as ViaError).code).toBe('not_found');
+    });
+
+    it('recommends the evenings the recorded answer carries, for an editor', async () => {
+      const via = editor();
+      const answer = await via.recommendSchedule({
+        rsoId: 1,
+        durationMinutes: 60,
+        dateRange: { start: '2026-09-14', end: '2026-09-21' },
+      }, ROSA);
+      expect(answer.curatedPicks.length).toBeGreaterThan(0);
+      expect(answer.curatedPicks[0]!.score).toBeGreaterThan(0);
+    });
+
+    it('creates a repeat and lists its meetings from then on', async () => {
+      const via = editor();
+      const created = await via.createEventSeries({
+        rsoId: 1,
+        title: 'Weekly meeting',
+        startTime: '2026-09-16 18:00:00',
+        endTime: '2026-09-16 19:00:00',
+        locationId: 5,
+        recurrence: { intervalWeeks: 1, daysOfWeek: ['WE'], endsOn: '2026-09-30' },
+      }, ROSA);
+
+      expect(created.eventIds.length).toBe(created.created);
+      expect(created.created).toBeGreaterThan(0);
+      const first = await via.getEvent(created.eventIds[0]!);
+      expect(first!.title).toBe('Weekly meeting');
+      expect(first!.seriesId).toBe(created.seriesId);
+    });
+
+    it('lists the members of an organization for a board member and refuses an editor', async () => {
+      const via = createFakeViaClient();
+      via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'board' }] });
+      const members = await via.listRsoMembers(1, ROSA);
+      expect(members[0]!.netId).not.toBe('');
+
+      const editorOnly = createFakeViaClient();
+      editorOnly.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'editor' }] });
+      const failure = await editorOnly.listRsoMembers(1, ROSA).then(() => null, (err: unknown) => err);
+      expect((failure as ViaError).code).toBe('forbidden');
+    });
+
+    it('lists the members a test seeds, with their roles', async () => {
+      const via = createFakeViaClient();
+      via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'board' }] });
+      via.seedMember(1, { netId: 'bo', fullName: 'Bo Chen', role: 'editor' });
+      const members = await via.listRsoMembers(1, ROSA);
+      expect(members.map(member => member.netId).sort()).toEqual(['alice', 'bo']);
+    });
+  });
 });

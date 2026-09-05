@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "event": {
+    "event_id": 10,
+    "rso_id": 1,
+    "rso_name": "IEEE",
+    "title": "General meeting",
+    "description": "Bring a laptop.",
+    "start_time": "2026-09-10T18:00:00-05:00",
+    "end_time": "2026-09-10T19:00:00-05:00",
+    "is_private": false,
+    "cancelled_at": null,
+    "location_id": 5,
+    "building": "Electrical & Computer Eng Bldg",
+    "room_number": "1002",
+    "location_text": null,
+    "location_note": "Use the north entrance.",
+    "series_id": 4,
+    "series_frequency": "weekly",
+    "series_interval_weeks": 1,
+    "series_days_of_week": "MO,WE",
+    "series_ends_on": "2026-12-09",
+    "interest_count": 3
+  }
+}

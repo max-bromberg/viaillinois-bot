@@ -6,6 +6,43 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+- The setup features panel is paged by category, because the registry outgrew both what
+  Discord will carry in one message and what one menu will offer. Each page lists the
+  features of one category with their state and, when a feature cannot work, the reason,
+  and what each feature does is written on the menu entry that switches it, which is what
+  the new summary field in the registry is for. A test asserts that no panel exceeds
+  either of Discord's limits with the whole registry.
+- The allowed administrative actions of section 6.7: postpone, cancel, describe,
+  visibility, re-post and the location note, each a command under the via group and a
+  button on the event card, with forms for the three that take text, filled in with what
+  the event holds now. Every one of them calls the web platform with the acting Discord
+  account and turns its refusals into one sentence each, which is one helper shared by
+  every action: a link button for an account VIA does not know, a sentence naming the
+  organization for an account it does not list as an editor, the clash the web platform
+  named for a conflict, and the wait for a busy answer.
+- A postponement's reason travels from the outbox entry into the notice that replies to
+  the announcement, so a channel reads why a meeting moved rather than only that it did.
+- The scheduler: `/via schedule` asks the same scheduler the dashboard asks and shows the
+  evenings with their scores, their clear weeks and their reasons; a button opens one of
+  Discord's own polls over the top few in a channel the board picks; the poll's result is
+  posted with a button that creates the repeat. Accepting checks the recommendation again
+  first and shows anything that has changed since the poll was opened before it creates
+  anything.
+- Membership roles: `/via roles` maps VIA's member, editor and board roles to Discord
+  roles, the `membership.changed` outbox entries keep them in step, and a daily
+  reconciliation reads the organization's members as the board member the server was
+  bound by. The bot never removes a role it did not grant, which the new Role_Grants table
+  records, and a server whose Manage Roles permission was taken away has the feature
+  switched off and its manager told once.
+- Linked roles: the three facts a server can require for a role are registered with
+  Discord at startup, and the link command says where the verification is started from.
+  Pushing a person's own values stays the web platform's.
+- The web platform client grows the acting endpoints: postpone, cancel, patch, the
+  scheduler and the series creation, along with the members of an organization, in all
+  three of the interface, the HTTP implementation and the fake.
+- The adapter grows forms, one of Discord's own polls, role menus and the two role calls,
+  and the dispatcher routes a submitted form by the identifier the form was built with.
+
 - Repository scaffold: manifest, type checking, the unit and db test projects, the
   throwaway test database, the container image, and the release scripts carried over
   from the web platform.

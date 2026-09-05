@@ -5,7 +5,7 @@ import type {
   AnnouncementPost, EventMirror, EventMirrors,
 } from '../../src/mirror/eventMirrors.ts';
 import type {
-  DiscordActions, PostOptions, Reply, ScheduledEventDraft,
+  DiscordActions, PollDraft, PollResults, PostOptions, Reply, ScheduledEventDraft,
 } from '../../src/discord/adapter.ts';
 import type { DirectMessageDelivery, DirectMessageOutcome } from '../../src/discord/directMessages.ts';
 import type { JobRuns } from '../../src/jobs/runs.ts';
@@ -136,7 +136,8 @@ export function memoryEventMirrors(): EventMirrors {
 /** One thing the bot did to Discord, as the recording wrapper writes it down. */
 export interface RecordedAction {
   action: 'post' | 'edit' | 'pin' | 'unpin' | 'createScheduledEvent'
-    | 'editScheduledEvent' | 'deleteScheduledEvent';
+    | 'editScheduledEvent' | 'deleteScheduledEvent' | 'poll' | 'readPoll'
+    | 'addRole' | 'removeRole';
   channelId?: string;
   guildId?: string;
   messageId?: string;
@@ -144,6 +145,9 @@ export interface RecordedAction {
   reply?: Reply;
   draft?: ScheduledEventDraft;
   replyToMessageId?: string;
+  poll?: PollDraft;
+  discordUserId?: string;
+  roleId?: string;
 }
 
 export interface RecordingActions extends DiscordActions {
@@ -152,6 +156,10 @@ export interface RecordingActions extends DiscordActions {
   setPermissions(guildId: string, permissions: DiscordPermission[]): void;
   /** Make the next call of a kind throw, for the failures the handlers have to survive. */
   failNextWith(error: Error): void;
+  /** What reading a poll answers with, for the job that closes one. */
+  setPollResults(results: PollResults | null): void;
+  /** Say that somebody has left the server, so that a role call answers with nothing. */
+  setAbsent(discordUserId: string): void;
 }
 
 /** Discord as a list of what the bot asked it to do. */
@@ -164,6 +172,8 @@ export function recordingActions(options: {
   let nextMessage = 800000000000000000n;
   let nextScheduled = 600000000000000000n;
   let nextFailure: Error | null = null;
+  let pollResults: PollResults | null = { finalized: true, answers: [] };
+  const absent = new Set<string>();
 
   function throwIfInstructed(): void {
     if (!nextFailure) return;
@@ -181,6 +191,43 @@ export function recordingActions(options: {
 
     failNextWith(error: Error): void {
       nextFailure = error;
+    },
+
+    setPollResults(results: PollResults | null): void {
+      pollResults = results;
+    },
+
+    setAbsent(discordUserId: string): void {
+      absent.add(discordUserId);
+    },
+
+    async postPoll(channelId: string, poll: PollDraft): Promise<string> {
+      throwIfInstructed();
+      nextMessage += 1n;
+      done.push({ action: 'poll', channelId, poll });
+      return String(nextMessage);
+    },
+
+    async readPoll(channelId: string, messageId: string): Promise<PollResults | null> {
+      throwIfInstructed();
+      done.push({ action: 'readPoll', channelId, messageId });
+      return pollResults;
+    },
+
+    async addRole(guildId: string, discordUserId: string, roleId: string): Promise<boolean> {
+      throwIfInstructed();
+      // Somebody who has left the server holds no roles to give or to take,
+      // which Discord answers as a member it does not have.
+      if (absent.has(discordUserId)) return false;
+      done.push({ action: 'addRole', guildId, discordUserId, roleId });
+      return true;
+    },
+
+    async removeRole(guildId: string, discordUserId: string, roleId: string): Promise<boolean> {
+      throwIfInstructed();
+      if (absent.has(discordUserId)) return false;
+      done.push({ action: 'removeRole', guildId, discordUserId, roleId });
+      return true;
     },
 
     async postMessage(channelId: string, reply: Reply, postOptions: PostOptions = {}): Promise<string> {

@@ -1,5 +1,5 @@
 import { campusDate, campusDateTime, campusTimeOfDay, relativeTimestamp } from './campusTime.ts';
-import type { Reply, ReplyButton } from '../discord/adapter.ts';
+import type { Reply, ReplyButton, ReplyRow } from '../discord/adapter.ts';
 import type { RsoWithEvents, ViaEvent } from '../via/client.ts';
 
 /**
@@ -26,6 +26,22 @@ export const RSO_EVENT_COUNT = 5;
 export interface CardOptions {
   /** The public address of the website, which the link buttons open. */
   websiteUrl: string;
+  /**
+   * Whether the person reading this card has a VIA account, which is what
+   * decides whether the administrative buttons are on it. The caller says so
+   * rather than the card asking, because a card answered privately is read by
+   * one person the caller has already resolved, and a card posted into a
+   * channel is read by everybody.
+   */
+  linked?: boolean;
+  /**
+   * Whether to offer the button that opens this card privately. An
+   * announcement is read by a whole channel and Discord cannot show one person
+   * a button and another person nothing, so a message everybody reads carries
+   * one button that opens the card for whoever pressed it, and the card that
+   * opens carries the administrative buttons.
+   */
+  manageable?: boolean;
 }
 
 /** The identifiers the card's own buttons carry, which the commands answer. */
@@ -37,6 +53,27 @@ export const EVENT_BUTTON = {
 
 export const RSO_BUTTON = {
   follow: (rsoId: number) => `rso:follow:${rsoId}`,
+};
+
+/**
+ * The administrative buttons, which are the six actions of section 6.7 of the
+ * design. They are written here rather than in the module that answers them
+ * because the card is what carries them, and they are shown only where the
+ * caller says the reader has a VIA account. Whether that person may actually
+ * act is the web platform's answer when one of them is pressed, never this
+ * card's.
+ */
+export const CARD_ADMIN_BUTTON = {
+  manage: (eventId: number) => `admin:manage:${eventId}`,
+  // The three that open a form carry a prefix of their own, because Discord
+  // takes a form only as the first thing said about an interaction and the
+  // dispatcher has to know which of these buttons might answer with one.
+  postpone: (eventId: number) => `admin:form:postpone:${eventId}`,
+  describe: (eventId: number) => `admin:form:describe:${eventId}`,
+  note: (eventId: number) => `admin:form:note:${eventId}`,
+  cancel: (eventId: number) => `admin:cancel:${eventId}`,
+  visibility: (eventId: number) => `admin:visibility:${eventId}`,
+  repost: (eventId: number) => `admin:repost:${eventId}`,
 };
 
 /** The page for one event on the website. */
@@ -189,36 +226,69 @@ export function renderEventCard(event: ViaEvent, options: CardOptions): Reply {
     if (description.endsWith('...')) lines.push('Read the rest on viaillinois.com.');
   }
 
-  return {
-    content: lines.join('\n'),
-    components: [{
+  const everybody: ReplyButton[] = [
+    {
+      kind: 'button',
+      style: 'primary',
+      label: 'Remind me',
+      customId: EVENT_BUTTON.remind(event.eventId),
+      // There is nothing to be reminded of once an event is cancelled.
+      disabled: cancelled,
+    },
+    {
+      kind: 'button',
+      style: 'secondary',
+      label: 'Interested',
+      customId: EVENT_BUTTON.interested(event.eventId),
+      disabled: cancelled,
+    },
+    {
+      kind: 'button',
+      style: 'secondary',
+      label: 'Add to calendar',
+      customId: EVENT_BUTTON.calendar(event.eventId),
+    },
+    linkButton('Open on VIA', eventAddress(event.eventId, options.websiteUrl)),
+  ];
+
+  if (options.manageable) {
+    everybody.push({
+      kind: 'button',
+      style: 'secondary',
+      label: 'Manage this event',
+      customId: CARD_ADMIN_BUTTON.manage(event.eventId),
+    });
+  }
+
+  const rows: ReplyRow[] = [{ kind: 'row', components: everybody }];
+
+  // Discord takes five buttons in a row, and there are six administrative
+  // actions, so they sit in two rows in the order a board does them.
+  if (options.linked) {
+    rows.push({
       kind: 'row',
       components: [
-        {
-          kind: 'button',
-          style: 'primary',
-          label: 'Remind me',
-          customId: EVENT_BUTTON.remind(event.eventId),
-          // There is nothing to be reminded of once an event is cancelled.
-          disabled: cancelled,
-        },
+        { kind: 'button', style: 'primary', label: 'Move', customId: CARD_ADMIN_BUTTON.postpone(event.eventId) },
+        { kind: 'button', style: 'danger', label: 'Cancel', customId: CARD_ADMIN_BUTTON.cancel(event.eventId) },
+        { kind: 'button', style: 'secondary', label: 'Description', customId: CARD_ADMIN_BUTTON.describe(event.eventId) },
         {
           kind: 'button',
           style: 'secondary',
-          label: 'Interested',
-          customId: EVENT_BUTTON.interested(event.eventId),
-          disabled: cancelled,
+          label: event.isPrivate ? 'Make public' : 'Make internal',
+          customId: CARD_ADMIN_BUTTON.visibility(event.eventId),
         },
-        {
-          kind: 'button',
-          style: 'secondary',
-          label: 'Add to calendar',
-          customId: EVENT_BUTTON.calendar(event.eventId),
-        },
-        linkButton('Open on VIA', eventAddress(event.eventId, options.websiteUrl)),
+        { kind: 'button', style: 'secondary', label: 'Note', customId: CARD_ADMIN_BUTTON.note(event.eventId) },
       ],
-    }],
-  };
+    });
+    rows.push({
+      kind: 'row',
+      components: [
+        { kind: 'button', style: 'secondary', label: 'Announce again', customId: CARD_ADMIN_BUTTON.repost(event.eventId) },
+      ],
+    });
+  }
+
+  return { content: lines.join('\n'), components: rows };
 }
 
 /** One organization, its description, and the events it has coming up. */

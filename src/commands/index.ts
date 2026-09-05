@@ -1,6 +1,7 @@
 import { featureById } from '../features/registry.ts';
 import {
-  answerAutocomplete, applyReply, respond, respondByUpdate, toInteraction, type Interaction,
+  answerAutocomplete, applyReply, respond, respondByUpdate, showModal, toInteraction,
+  FAILURE_MESSAGE, type Interaction, type Reply,
 } from '../discord/adapter.ts';
 import { guildSubject, userSubject, type RateTier } from '../ratelimit/windows.ts';
 import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
@@ -18,6 +19,12 @@ import {
   midtermsCommand, coursesAddCommand, coursesRemoveCommand, coursesListCommand,
 } from './midterms.ts';
 import { roomsCommand, courseCommand, buildingCommand } from './campus.ts';
+import {
+  postponeCommand, cancelCommand, describeCommand, visibilityCommand, repostCommand,
+  noteCommand, adminComponent, adminFormComponent,
+} from './admin.ts';
+import { scheduleCommand, schedulerComponent, schedulerAcceptComponent } from './scheduler.ts';
+import { rolesCommand, rolesComponent } from './roles.ts';
 
 export { describeWait } from './types.ts';
 export type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
@@ -66,6 +73,14 @@ export const handlers: readonly CommandHandler[] = [
   roomsCommand,
   courseCommand,
   buildingCommand,
+  postponeCommand,
+  cancelCommand,
+  describeCommand,
+  visibilityCommand,
+  repostCommand,
+  noteCommand,
+  scheduleCommand,
+  rolesCommand,
 ];
 
 /**
@@ -80,6 +95,13 @@ export const componentHandlers: readonly ComponentHandler[] = [
   rsoComponent,
   setupComponent,
   feedComponent,
+  // The two handlers that may answer with a form come before the ones whose
+  // prefixes they sit inside, because the first prefix that matches answers.
+  adminFormComponent,
+  adminComponent,
+  schedulerAcceptComponent,
+  schedulerComponent,
+  rolesComponent,
 ];
 
 export const UNKNOWN_COMMAND_MESSAGE =
@@ -98,6 +120,37 @@ export const GUILD_LIMIT_MESSAGE = 'This server has run too many VIA commands in
  */
 export function tierOf(handler: CommandHandler | ComponentHandler): RateTier {
   return featureById(handler.featureId).tier === 'read' ? 'unlinked' : 'linked';
+}
+
+/**
+ * Answer something that may want to open a form.
+ *
+ * Discord takes a form only as the first thing an application says about an
+ * interaction, so nothing may be acknowledged before the handler has run. That
+ * costs the three second window rather than the fifteen minute one, which is
+ * why the handlers that open a form make one call to fill the boxes in and no
+ * more. A handler that answers with a message instead is answered here as
+ * well, because by then the acknowledgement is no longer available.
+ */
+async function answerOrShowModal(
+  raw: unknown,
+  ephemeral: boolean,
+  produce: () => Promise<Reply>,
+): Promise<void> {
+  let reply: Reply;
+  try {
+    reply = await produce();
+  } catch (err) {
+    console.error('interaction failed:', (err as Error).message);
+    await applyReply(raw, { content: FAILURE_MESSAGE, ephemeral });
+    return;
+  }
+
+  if (reply.modal) {
+    await showModal(raw, reply.modal);
+    return;
+  }
+  await applyReply(raw, { ...reply, ephemeral });
 }
 
 export function createDispatcher(context: CommandContext): (raw: unknown) => Promise<void> {
@@ -164,7 +217,9 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       return;
     }
 
-    if (interaction.kind === 'button' || interaction.kind === 'select') {
+    // A form sent back is routed exactly as the button that opened it was,
+    // because Discord gives it the identifier the form was built with.
+    if (interaction.kind === 'button' || interaction.kind === 'select' || interaction.kind === 'modal') {
       const customId = interaction.customId ?? '';
       const handler = componentHandlers.find(one => customId.startsWith(one.prefix));
       // A component nothing answers is left alone. It was posted by a version
@@ -173,6 +228,15 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       if (!handler) return;
 
       if (!(await withinLimits(interaction, tierOf(handler), raw))) return;
+
+      // A handler that may open a form is run before anything is
+      // acknowledged, because Discord takes a form only as the first thing
+      // said about an interaction. A form sent back is a new interaction, so
+      // the answer to one is acknowledged like any other.
+      if (handler.opensModal && interaction.kind !== 'modal') {
+        await answerOrShowModal(raw, handler.ephemeral !== false, () => handler.run(interaction, context));
+        return;
+      }
 
       if (handler.updateInPlace) {
         await respondByUpdate(raw, () => handler.run(interaction, context));
@@ -191,6 +255,11 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
     }
 
     if (!(await withinLimits(interaction, tierOf(handler), raw))) return;
+
+    if (handler.opensModal) {
+      await answerOrShowModal(raw, handler.ephemeral, () => handler.run(interaction, context));
+      return;
+    }
 
     await respond(raw, { ephemeral: handler.ephemeral }, () => handler.run(interaction, context));
   };

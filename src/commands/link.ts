@@ -1,4 +1,5 @@
 import { featureById } from '../features/registry.ts';
+import { linkedRolesAdvice } from '../roles/linked.ts';
 import { ViaBusyError, ViaError } from '../via/client.ts';
 import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
 import type { Interaction, Reply } from '../discord/adapter.ts';
@@ -89,7 +90,8 @@ export const linkCommand: CommandHandler = {
       content:
         `Open ${session.address} to finish linking this Discord account to your VIA account. `
         + 'You will sign in with your NetID and then approve the bot on Discord. '
-        + 'The address works once and expires in ten minutes.',
+        + 'The address works once and expires in ten minutes.\n\n'
+        + linkedRolesAdvice(),
       components: [{
         kind: 'row',
         components: [{

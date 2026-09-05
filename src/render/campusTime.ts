@@ -142,6 +142,20 @@ export function campusStamp(now: Date = new Date()): string {
   return `${isoDay(fields)} ${pad(fields.hour)}:${pad(fields.minute)}:${pad(fields.second)}`;
 }
 
+/**
+ * The campus wall clock to the minute, as a form holds it.
+ *
+ * A modal that moves a meeting is filled in with the time the meeting runs at
+ * now, and what the person sends back is read by the web platform's own wall
+ * clock reader, which takes a date and a time with or without seconds. So this
+ * is the one place both sides agree on, and it is written here beside the rest
+ * of the campus clock rather than in the command that shows the box.
+ */
+export function campusWallClock(value: string | Date | null | undefined): string {
+  const instant = toInstant(value);
+  return instant ? campusStamp(instant).slice(0, 16) : '';
+}
+
 /** The windows the events command offers, named as its options name them. */
 export type ListingWindow = 'today' | 'thisweek' | 'nextweek' | 'thismonth';
 

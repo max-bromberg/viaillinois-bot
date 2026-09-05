@@ -10,7 +10,8 @@ here unchanged; a change to one of them is a change the web platform made delibe
 The files in the first table are hand written from
 `docs/superpowers/specs/2026-09-04-via-internal-service-api.md`, sections 4 and 6, because
 the link endpoints, the binding confirmation, the interest endpoint and the personal
-calendar endpoints do not exist on the web platform yet. The interest endpoint is the web
+calendar endpoints do not exist on the web platform yet, and one of them,
+The interest endpoint is the web
 platform's seventh increment, and `interest.json` is written from the row for
 `PUT /events/{id}/interest` in section 6 of that specification. The two personal calendar
 files are written from the same section, whose personal calendar endpoints are being built
@@ -55,3 +56,8 @@ Times carry the campus offset, as the public API sends them.
 | `calendars.personal.json` | `POST /calendars/personal`, the address of the person's calendar and when its token was last rotated |
 | `calendars.personalRsos.json` | `PUT /calendars/personal/rsos`, the answer to updating the organizations a calendar carries without rotating its token |
 | `interest.json` | recorded by the web platform as acting.interest.json: `PUT /events/{id}/interest`, the answer to setting or clearing interest, with the count after the change |
+| `acting.postpone.json` | `POST /events/{id}/postpone`, the event as it stands after it was moved |
+| `acting.cancel.json` | `POST /events/{id}/cancel`, with the moment the event was cancelled at |
+| `acting.patch.json` | `PATCH /events/{id}`, the event as it stands after its description, its visibility or its location note was changed |
+| `acting.series.json` | `POST /events/series`, the repeat that was created, with the events it holds and the dates it skipped |
+| `scheduler.recommend.json` | `POST /scheduler/recommend`, recorded by the web platform as acting.recommend.json in the shape the scheduler service answers with |

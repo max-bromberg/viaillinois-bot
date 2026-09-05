@@ -31,6 +31,20 @@ export const LINK_BUTTON: ReplyRow[] = [{
   components: [{ kind: 'button', style: 'primary', label: 'Link my account', customId: 'identity:link' }],
 }];
 
+export const NOT_LINKED_TO_ACT_MESSAGE =
+  'This needs a VIA account, because VIA decides who may act for an organization. Please link this Discord account and then try again.';
+
+/**
+ * What somebody reads when the web platform does not list them as an editor
+ * of the organization whose event they tried to change. It says whose decision
+ * it was and what to do about it, because the person did nothing wrong and can
+ * act on what they are told.
+ */
+export function notAnEditorMessage(rsoName: string | null): string {
+  const organization = rsoName ?? 'that organization';
+  return `VIA does not list this account as an editor of ${organization}, so nothing has been changed. Ask somebody on the board of ${organization} to make you an editor on viaillinois.com.`;
+}
+
 /** Turn whatever went wrong into the sentence the person reads. */
 export function answerFor(err: unknown): Reply {
   if (err instanceof ViaBusyError) {
@@ -64,3 +78,68 @@ export async function requireLink(
   if (link) return null;
   return { content: LINK_NEEDED_MESSAGE, components: LINK_BUTTON };
 }
+
+/**
+ * Doing something on VIA as the person who asked for it.
+ *
+ * Every administrative action, and the scheduler, calls the web platform with
+ * the acting Discord account and reads whatever comes back. Four answers are
+ * refusals a person can act on and each of them is one sentence: no VIA
+ * account, which is a link button rather than an instruction to go and find a
+ * command; an account the web platform does not list as an editor of that
+ * organization; a clash, which is named as the web platform named it; and a
+ * busy web platform, which names the wait. Anything else is the web platform
+ * not answering, which is the same sentence everywhere else in the bot.
+ *
+ * It is written once here so that six actions and three scheduler steps say
+ * the same thing rather than nine things that nearly match, and so that the
+ * bot decides none of it: what comes back is what the web platform decided.
+ */
+export type ViaActionOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; reply: Reply };
+
+export interface ViaActionOptions {
+  /** The organization the action was about, named in the refusal when it is known. */
+  rsoName?: string | null;
+}
+
+export async function actOnVia<T>(
+  run: () => Promise<T>,
+  options: ViaActionOptions = {},
+): Promise<ViaActionOutcome<T>> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (err) {
+    if (err instanceof ViaBusyError) {
+      return {
+        ok: false,
+        reply: { content: `VIA is busy right now. Please try again ${describeWait(err.retryAfterSeconds)}.` },
+      };
+    }
+    if (err instanceof ViaError) {
+      if (err.code === 'not_linked') {
+        return { ok: false, reply: { content: NOT_LINKED_TO_ACT_MESSAGE, components: LINK_BUTTON } };
+      }
+      if (err.code === 'forbidden') {
+        return { ok: false, reply: { content: notAnEditorMessage(options.rsoName ?? null) } };
+      }
+      if (err.code === 'conflict') {
+        return { ok: false, reply: { content: `${err.message} Nothing has been changed.` } };
+      }
+      // A value the web platform will not take is answered with the sentence
+      // the web platform wrote about it, because it names the field.
+      if (err.code === 'invalid') {
+        return { ok: false, reply: { content: `${err.message} Nothing has been changed.` } };
+      }
+      if (err.code === 'not_found') {
+        return { ok: false, reply: { content: NOTHING_TO_ACT_ON_MESSAGE } };
+      }
+      return { ok: false, reply: { content: UNREACHABLE_MESSAGE } };
+    }
+    throw err;
+  }
+}
+
+export const NOTHING_TO_ACT_ON_MESSAGE =
+  'VIA does not have that event any more, so there is nothing to change. It was probably deleted after this message was posted.';

@@ -13,6 +13,7 @@ function feature(overrides: Partial<Feature>): Feature {
   return {
     id: 'events.list',
     description: 'List the events coming up.',
+    summary: 'List the events coming up.',
     category: 'command',
     defaultEnabled: true,
     requiredPermissions: [],
@@ -49,9 +50,12 @@ describe('building the application commands from the registry', () => {
     }
   });
 
-  it('gives the via group the setup, config and remove subcommands', () => {
+  it('gives the via group the setup subcommands and the board subcommands', () => {
     const group = buildCommands(features).find(c => c.name === VIA_GROUP)!;
-    expect(group.options!.map(o => o.name)).toEqual(['setup', 'config', 'remove']);
+    expect(group.options!.map(o => o.name)).toEqual([
+      'setup', 'config', 'remove',
+      'postpone', 'cancel', 'describe', 'visibility', 'repost', 'note', 'schedule', 'roles',
+    ]);
     for (const option of group.options!) {
       expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
     }

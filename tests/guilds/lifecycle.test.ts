@@ -43,6 +43,9 @@ function recordingStore() {
     async setGuildMessage() {},
     async listGuildMessages() { return []; },
     async removeGuildMessage() {},
+    async setRoleMapping() {},
+    async unsetRoleMapping() {},
+    async listRoleMappings() { return {}; },
     async removeGuild(guildId) {
       removed.push(guildId);
       return { features: 0, channels: 0, followedRsos: 0, installation: true } as RemovedRows;

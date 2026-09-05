@@ -5,11 +5,18 @@ import { join } from 'node:path';
 import { findViolations } from '../../scripts/check-language.js';
 import {
   features, featureById, CHANNEL_PURPOSES, COMMAND_GROUP_DESCRIPTIONS,
+  MAX_SELECT_OPTION_DESCRIPTION,
 } from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the identity, reading, setup, feed, campus and proactive features the first four increments have', () => {
+  it('registers the identity, reading, setup, feed, campus, proactive and board features the first five increments have', () => {
     expect(features.map(f => f.id).sort()).toEqual([
+      'admin.cancel',
+      'admin.describe',
+      'admin.locationnote',
+      'admin.postpone',
+      'admin.repost',
+      'admin.visibility',
       'announce.changes',
       'announce.dayof',
       'announce.digest',
@@ -30,7 +37,12 @@ describe('the feature registry', () => {
       'living.thisweek',
       'midterms.lookup',
       'mirror.scheduled',
+      'roles.linked',
+      'roles.membership',
       'rsos.detail',
+      'scheduler.accept',
+      'scheduler.poll',
+      'scheduler.recommend',
       'setup.configure',
       'setup.remove',
     ]);
@@ -315,5 +327,100 @@ describe('the feature registry', () => {
 
   it('lists the five channel purposes the design names', () => {
     expect([...CHANNEL_PURPOSES].sort()).toEqual(['announcements', 'digest', 'exams', 'reminders', 'thisweek']);
+  });
+
+  /**
+   * The summary is the short form of the description, and it exists because
+   * the setup panel puts it in a Discord menu option, which Discord cuts at a
+   * hundred characters. A summary longer than that would be shown cut off,
+   * so the width is a claim the registry makes rather than a hope.
+   */
+  it('gives every feature a summary that fits the width Discord allows a menu option', () => {
+    for (const feature of features) {
+      expect(feature.summary.length).toBeGreaterThan(0);
+      expect(feature.summary.length).toBeLessThanOrEqual(MAX_SELECT_OPTION_DESCRIPTION);
+    }
+  });
+
+  it('writes every summary as at least one complete sentence', () => {
+    for (const feature of features) {
+      expect(feature.summary.trim()).toMatch(/^[A-Z].*\.$/);
+    }
+  });
+
+  it('gives every summary to the language check', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'via-bot-summaries-'));
+    try {
+      const path = join(dir, 'summaries.txt');
+      await writeFile(path, features.map(f => f.summary).join('\n') + '\n');
+      expect(findViolations([path])).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps every administrative action to an editor of the organization, in a server', () => {
+    for (const id of ['admin.postpone', 'admin.cancel', 'admin.describe', 'admin.visibility',
+      'admin.repost', 'admin.locationnote']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('administration');
+      expect(feature.tier).toBe('editor');
+      expect([...feature.contexts]).toEqual(['guild']);
+      expect(feature.command).toBeDefined();
+    }
+  });
+
+  it('names the event on every administrative action, so a command can be typed as well as pressed', () => {
+    for (const id of ['admin.postpone', 'admin.cancel', 'admin.describe', 'admin.visibility',
+      'admin.repost', 'admin.locationnote']) {
+      const option = featureById(id).command!.options![0]!;
+      expect(option).toMatchObject({ name: 'event', required: true, autocomplete: true });
+    }
+  });
+
+  it('needs the permission to post for the action that posts an announcement again', () => {
+    expect(featureById('admin.repost').requiredPermissions).toContain('SendMessages');
+    expect(featureById('admin.repost').requiredPermissions).toContain('ViewChannel');
+  });
+
+  it('keeps the scheduler to an editor of the organization, in a server', () => {
+    for (const id of ['scheduler.recommend', 'scheduler.poll', 'scheduler.accept']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('administration');
+      expect(feature.tier).toBe('editor');
+      expect([...feature.contexts]).toEqual(['guild']);
+    }
+  });
+
+  it('asks the scheduler for one organization, one span, one length and a window of hours', () => {
+    const command = featureById('scheduler.recommend').command!;
+    expect(command.name).toBe('schedule');
+    expect(command.options!.map(option => option.name))
+      .toEqual(['rso', 'span', 'length', 'earliest', 'latest']);
+    expect(command.options![0]).toMatchObject({ name: 'rso', required: true, autocomplete: true });
+    expect(command.options![1]!.choices!.map(choice => choice.value)).toEqual(['week', 'term']);
+  });
+
+  it('reaches the poll and the accept from a message rather than from a name of their own', () => {
+    expect(featureById('scheduler.poll').command).toBeUndefined();
+    expect(featureById('scheduler.accept').command).toBeUndefined();
+  });
+
+  it('keeps membership roles to a server manager, off until a server asks, and needs Manage Roles', () => {
+    const feature = featureById('roles.membership');
+    expect(feature.category).toBe('roles');
+    expect(feature.tier).toBe('manager');
+    expect(feature.defaultEnabled).toBe(false);
+    expect([...feature.requiredPermissions]).toEqual(['ManageRoles']);
+    expect([...feature.contexts]).toEqual(['guild']);
+    expect(feature.command).toMatchObject({ name: 'roles' });
+  });
+
+  it('registers the linked roles facts without a command and without a permission', () => {
+    const feature = featureById('roles.linked');
+    expect(feature.category).toBe('roles');
+    expect(feature.requiredPermissions).toEqual([]);
+    expect(feature.channelPurposes).toEqual([]);
+    expect(feature.command).toBeUndefined();
   });
 });

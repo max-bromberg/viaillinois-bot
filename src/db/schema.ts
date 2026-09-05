@@ -1,5 +1,5 @@
 import {
-  mysqlTable, primaryKey, unique, index, int, varchar, tinyint, boolean, datetime, mysqlEnum,
+  mysqlTable, primaryKey, unique, index, int, json, varchar, tinyint, boolean, datetime, mysqlEnum,
 } from 'drizzle-orm/mysql-core';
 import { sql } from 'drizzle-orm';
 
@@ -58,6 +58,12 @@ export const guildInstallations = mysqlTable('Guild_Installations', {
   reminderLeadMinutes: int('reminder_lead_minutes').default(60).notNull(),
   // Whether each digest is pinned and the one before it unpinned.
   digestPinned: boolean('digest_pinned').default(false).notNull(),
+  // The Discord account that bound this server to its organization, which the
+  // web platform confirmed was on that organization's board at the time. The
+  // daily role reconciliation reads the organization's members as this person,
+  // because the members endpoint is board work and the bot has no identity of
+  // its own on VIA. Null until a server is bound to one organization.
+  boundBy: snowflake('bound_by'),
 }, (table) => [
   primaryKey({ columns: [table.guildId], name: 'Guild_Installations_guild_id' }),
 ]);
@@ -130,6 +136,68 @@ export const guildRoleMappings = mysqlTable('Guild_Role_Mappings', {
   roleId: snowflake('role_id').notNull(),
 }, (table) => [
   primaryKey({ columns: [table.guildId, table.membershipRole], name: 'Guild_Role_Mappings_guild_id_membership_role' }),
+]);
+
+/**
+ * Every Discord role the bot itself gave somebody, and which VIA membership
+ * role it was given for.
+ *
+ * Section 6.1 of the design says the bot never removes a role it did not
+ * grant. A server may hand the same role out by hand, to an alumnus, to
+ * somebody helping with an event, or to a person whose membership VIA has not
+ * caught up with yet, and taking that away because VIA does not list them
+ * would be the bot overruling the server about its own roles. So a row is
+ * written here when the bot grants a role, and a role with no row here is left
+ * alone for ever.
+ */
+export const roleGrants = mysqlTable('Role_Grants', {
+  guildId: snowflake('guild_id').notNull().references(() => guildInstallations.guildId, { onDelete: 'cascade' }),
+  discordUserId: snowflake('discord_user_id').notNull(),
+  roleId: snowflake('role_id').notNull(),
+  membershipRole: mysqlEnum('membership_role', ['member', 'editor', 'board']).notNull(),
+  grantedAt: stamp('granted_at'),
+}, (table) => [
+  primaryKey({
+    columns: [table.guildId, table.discordUserId, table.roleId],
+    name: 'Role_Grants_guild_id_discord_user_id_role_id',
+  }),
+  index('idx_role_grants_guild').on(table.guildId),
+]);
+
+/**
+ * A poll the scheduler opened over the evenings VIA recommended.
+ *
+ * Discord counts the votes and holds the answers, and this holds the two
+ * things Discord cannot: which recommendation each answer stood for, so that
+ * the winning answer can be turned back into a time and a room, and what was
+ * asked for in the first place, so that the recommendation can be run again
+ * when somebody accepts. It also holds when the poll closes, because Discord
+ * sends no event of its own to say that a poll has ended and the bot reads the
+ * result at the hour it knows the poll runs to.
+ *
+ * The candidates are what the bot itself wrote into the poll, never anything a
+ * person typed, so nothing here is message content.
+ */
+export const schedulerPolls = mysqlTable('Scheduler_Polls', {
+  pollId: int('poll_id').autoincrement().notNull(),
+  guildId: snowflake('guild_id').notNull().references(() => guildInstallations.guildId, { onDelete: 'cascade' }),
+  channelId: snowflake('channel_id').notNull(),
+  messageId: snowflake('message_id').notNull(),
+  rsoId: int('rso_id').notNull(),
+  /** The Discord account that opened the poll, which is who the result names. */
+  openedBy: snowflake('opened_by').notNull(),
+  /** What was asked of the scheduler, so that accepting can ask it again. */
+  request: json('request').notNull(),
+  /** The evenings the poll offered, in the order Discord holds its answers. */
+  candidates: json('candidates').notNull(),
+  closesAt: datetime('closes_at', { mode: 'string' }).notNull(),
+  /** When the result was posted, which is what stops it being posted twice. */
+  closedAt: datetime('closed_at', { mode: 'string' }),
+  createdAt: stamp('created_at'),
+}, (table) => [
+  primaryKey({ columns: [table.pollId], name: 'Scheduler_Polls_poll_id' }),
+  unique('uq_scheduler_poll_message').on(table.guildId, table.messageId),
+  index('idx_scheduler_polls_closes_at').on(table.closesAt),
 ]);
 
 /**

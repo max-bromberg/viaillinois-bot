@@ -223,3 +223,25 @@ describe('the announcement of something that was removed', () => {
     ]);
   });
 });
+
+/**
+ * An announcement is read by a whole channel, and Discord cannot show one
+ * person a button and another person nothing on one message. So the card the
+ * six administrative actions sit on is opened privately by whoever presses the
+ * one button the announcement carries.
+ */
+describe('reaching the administrative actions from an announcement', () => {
+  it('carries the button that opens the card, and none of the actions themselves', () => {
+    const announcement = renderEventAnnouncement(event(), { websiteUrl: 'https://viaillinois.com' });
+    const ids = JSON.stringify(announcement.components);
+    expect(ids).toContain('admin:manage:10');
+    expect(ids).not.toContain('admin:cancel:10');
+  });
+
+  it('carries it on the announcement of a whole series as well', () => {
+    const announcement = renderSeriesAnnouncement(event(), series, {
+      websiteUrl: 'https://viaillinois.com',
+    });
+    expect(JSON.stringify(announcement.components)).toContain('admin:manage:10');
+  });
+});

@@ -396,6 +396,30 @@ describe('an event that changed', () => {
     expect(notices[0]!.replyToMessageId).not.toBeUndefined();
   });
 
+  /**
+   * A postponement made from Discord carries a reason, and the web platform
+   * puts it in the entry rather than in the event. A channel reading that a
+   * meeting has moved wants to know why, so the notice says it.
+   */
+  it('says why the event moved when the board gave a reason', async () => {
+    const { handlers, actions } = await announced();
+    await handlers['event.updated']!(entryOf('event.updated', {
+      event: payloadEvent({ startTime: '2026-09-11T19:00:00-05:00', endTime: '2026-09-11T20:00:00-05:00' }),
+      changed: ['start_time', 'end_time'],
+      reason: 'The room flooded.',
+    }, { outboxId: 3 }));
+
+    const notices = posts(actions).slice(1);
+    expect(notices[0]!.reply!.content).toContain('The room flooded.');
+  });
+
+  it('says only that it moved when the board gave no reason', async () => {
+    const { handlers, actions } = await announced();
+    await handlers['event.updated']!(moved);
+    const notices = posts(actions).slice(1);
+    expect(notices[0]!.reply!.content).not.toContain('The reason given');
+  });
+
   it('edits without a notice when what changed was neither the time nor the place', async () => {
     const { handlers, actions } = await announced();
     await handlers['event.updated']!(entryOf('event.updated', {

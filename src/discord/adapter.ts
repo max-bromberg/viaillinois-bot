@@ -1,6 +1,6 @@
 import {
   ChannelType, ComponentType, GuildScheduledEventEntityType, GuildScheduledEventPrivacyLevel,
-  InteractionContextType, InteractionType, MessageFlags, PermissionFlagsBits,
+  InteractionContextType, InteractionType, MessageFlags, PermissionFlagsBits, TextInputStyle,
 } from 'discord.js';
 import type { Client } from 'discord.js';
 import type { DiscordPermission, InteractionContext } from '../features/registry.ts';
@@ -69,8 +69,13 @@ export interface Interaction {
 
 export type ButtonStyle = 'primary' | 'secondary' | 'success' | 'danger' | 'link';
 
-/** Whether a menu picks from a list the bot wrote or from the server's channels. */
-export type SelectKind = 'string' | 'channel';
+/**
+ * Whether a menu picks from a list the bot wrote, from the server's channels,
+ * or from the server's roles. The role menu is Discord's own, so a server
+ * mapping its member role does not have to keep a list of role identifiers in
+ * step with the bot.
+ */
+export type SelectKind = 'string' | 'channel' | 'role';
 
 /** One entry in a menu the bot wrote. */
 export interface ReplySelectOption {
@@ -136,6 +141,42 @@ export interface Reply {
   ephemeral?: boolean;
   components?: ReplyRow[];
   files?: ReplyFile[];
+  /**
+   * A form to open instead of a message. Discord allows an application to
+   * show a modal only as the first thing it says about an interaction, never
+   * after an acknowledgement, so a handler that answers with one is run
+   * before anything is acknowledged and the rest of this reply is unused.
+   */
+  modal?: ReplyModal;
+}
+
+/** Whether a box in a modal is one line or several. */
+export type ModalFieldStyle = 'short' | 'paragraph';
+
+/** One box in a modal, filled in with what it holds now where there is one. */
+export interface ReplyModalField {
+  /** The identifier the submitted value arrives under. */
+  customId: string;
+  /** What the person reads above the box, at most forty five characters. */
+  label: string;
+  style?: ModalFieldStyle;
+  /** What the box starts with, which is how a modal is pre filled. */
+  value?: string;
+  placeholder?: string;
+  required?: boolean;
+  maxLength?: number;
+}
+
+/**
+ * A form Discord shows over the message. The identifier is what the submitted
+ * form arrives under, so it carries what the handler needs to know, such as
+ * the event being changed.
+ */
+export interface ReplyModal {
+  customId: string;
+  /** The heading of the form, at most forty five characters. */
+  title: string;
+  fields: ReplyModalField[];
 }
 
 /** One completion Discord offers while a person is still typing an option. */
@@ -321,9 +362,15 @@ function buttonJson(button: ReplyButton): Record<string, unknown> {
   return built;
 }
 
+const SELECT_TYPES: Record<SelectKind, number> = {
+  string: ComponentType.StringSelect,
+  channel: ComponentType.ChannelSelect,
+  role: ComponentType.RoleSelect,
+};
+
 function selectJson(select: ReplySelect): Record<string, unknown> {
   const built: Record<string, unknown> = {
-    type: select.selectKind === 'channel' ? ComponentType.ChannelSelect : ComponentType.StringSelect,
+    type: SELECT_TYPES[select.selectKind],
     custom_id: select.customId,
     min_values: select.minValues ?? 1,
     max_values: select.maxValues ?? 1,
@@ -332,6 +379,8 @@ function selectJson(select: ReplySelect): Record<string, unknown> {
   if (select.disabled) built.disabled = true;
   if (select.selectKind === 'channel') {
     built.channel_types = [...POSTABLE_CHANNEL_TYPES];
+  } else if (select.selectKind === 'role') {
+    // A role menu is Discord's own list, so it carries no options of ours.
   } else {
     built.options = (select.options ?? []).map(option => {
       const entry: Record<string, unknown> = { label: option.label, value: option.value };
@@ -417,6 +466,36 @@ export function toComponents(reply: Reply): unknown[] {
     components: row.components.map(component =>
       component.kind === 'select' ? selectJson(component) : buttonJson(component)),
   }));
+}
+
+const MODAL_FIELD_STYLES: Record<ModalFieldStyle, number> = {
+  short: TextInputStyle.Short,
+  paragraph: TextInputStyle.Paragraph,
+};
+
+/**
+ * Turn a modal into the payload the library shows. Discord puts each box in a
+ * row of its own, which is why the rows here are not something the caller has
+ * to build.
+ */
+export function toModal(modal: ReplyModal): Record<string, unknown> {
+  return {
+    custom_id: modal.customId,
+    title: modal.title,
+    components: modal.fields.map(field => {
+      const input: Record<string, unknown> = {
+        type: ComponentType.TextInput,
+        custom_id: field.customId,
+        label: field.label,
+        style: MODAL_FIELD_STYLES[field.style ?? 'short'],
+        required: Boolean(field.required),
+      };
+      if (field.value) input.value = field.value;
+      if (field.placeholder) input.placeholder = field.placeholder;
+      if (field.maxLength !== undefined) input.max_length = field.maxLength;
+      return { type: ComponentType.ActionRow, components: [input] };
+    }),
+  };
 }
 
 /** Turn the files of a reply into the attachments the library sends. */
@@ -514,6 +593,23 @@ export async function respond(
     reply = { content: FAILURE_MESSAGE, ephemeral: options.ephemeral };
   }
   await applyReply(target, { ...reply, ephemeral: options.ephemeral });
+}
+
+interface Modalable {
+  showModal: (payload: unknown) => Promise<unknown>;
+}
+
+/**
+ * Open a form over the message.
+ *
+ * Discord takes a modal only as the first thing an application says about an
+ * interaction, so nothing may have been acknowledged before this is called.
+ * That is why a handler which answers with one is run before the deferral
+ * rather than after it, and why the work behind such a handler is kept to the
+ * one call it takes to fill the boxes in.
+ */
+export async function showModal(raw: unknown, modal: ReplyModal): Promise<void> {
+  await (raw as Modalable).showModal(toModal(modal));
 }
 
 interface Acknowledgeable {
@@ -614,6 +710,36 @@ export interface PostOptions {
   replyToMessageId?: string;
 }
 
+/**
+ * A poll, as Discord's own control takes it. The duration is in hours,
+ * because that is what Discord counts in, and the content is the message the
+ * poll sits under, which says what the poll is for.
+ */
+export interface PollDraft {
+  content: string;
+  /** The question itself, at most three hundred characters. */
+  question: string;
+  /** The answers, at most ten of them, each at most fifty five characters. */
+  answers: string[];
+  durationHours: number;
+  allowMultiselect?: boolean;
+}
+
+/** One answer of a poll and how many people chose it. */
+export interface PollAnswerResult {
+  text: string;
+  votes: number;
+}
+
+/**
+ * A poll as it now stands. Discord finalizes the counts shortly after a poll
+ * closes, and until it has, the counts are the ones seen so far.
+ */
+export interface PollResults {
+  finalized: boolean;
+  answers: PollAnswerResult[];
+}
+
 export interface DiscordActions {
   /** Post a message and answer with the identifier it left behind. */
   postMessage(channelId: string, reply: Reply, options?: PostOptions): Promise<string>;
@@ -623,6 +749,22 @@ export interface DiscordActions {
   createScheduledEvent(guildId: string, draft: ScheduledEventDraft): Promise<string>;
   editScheduledEvent(guildId: string, scheduledEventId: string, draft: ScheduledEventDraft): Promise<void>;
   deleteScheduledEvent(guildId: string, scheduledEventId: string): Promise<void>;
+  /** Post a message carrying one of Discord's own polls, and answer with its identifier. */
+  postPoll(channelId: string, poll: PollDraft): Promise<string>;
+  /**
+   * The poll on a message as it now stands, or null when the message carries
+   * none. The scheduler reads this when a poll's time is up, because Discord
+   * sends no event of its own to say that a poll has closed.
+   */
+  readPoll(channelId: string, messageId: string): Promise<PollResults | null>;
+  /**
+   * Give somebody a role, answering whether it was given. Somebody who has
+   * left the server is not a failure to put right, so that answers false
+   * rather than throwing.
+   */
+  addRole(guildId: string, discordUserId: string, roleId: string): Promise<boolean>;
+  /** Take a role away again, answering whether it was taken. */
+  removeRole(guildId: string, discordUserId: string, roleId: string): Promise<boolean>;
   /** Which permissions the bot itself holds in a server, named as the registry names them. */
   permissionsIn(guildId: string): Promise<DiscordPermission[]>;
 }
@@ -643,6 +785,17 @@ export function isMissingAccess(err: unknown): boolean {
 /** Discord's code for a message that is no longer there, such as one somebody deleted. */
 const UNKNOWN_MESSAGE = 10008;
 
+/** Discord's code for somebody who is not a member of the server any more. */
+const UNKNOWN_MEMBER = 10007;
+
+/**
+ * Whether the person a role call named has left the server. Nobody has to put
+ * that right: a person who has left holds no roles to give or to take.
+ */
+export function isMissingMember(err: unknown): boolean {
+  return (err as { code?: number } | null)?.code === UNKNOWN_MEMBER;
+}
+
 /**
  * Whether the message a call named is gone. An announcement somebody deleted
  * is nothing to keep current, and nothing for anybody to put right, so it is
@@ -662,6 +815,19 @@ interface PostedMessage {
   edit: (payload: Record<string, unknown>) => Promise<unknown>;
   pin: () => Promise<unknown>;
   unpin: () => Promise<unknown>;
+  /** The poll the message carries, for a message the bot posted one on. */
+  poll?: {
+    resultsFinalized?: boolean;
+    answers?: Map<number, { text?: string; voteCount?: number }>;
+  } | null;
+}
+
+/** A member, as the library answers one, with the two role calls on it. */
+interface GuildMember {
+  roles: {
+    add: (roleId: string) => Promise<unknown>;
+    remove: (roleId: string) => Promise<unknown>;
+  };
 }
 
 export function createDiscordActions(client: Client): DiscordActions {
@@ -679,7 +845,10 @@ export function createDiscordActions(client: Client): DiscordActions {
     const found = await client.guilds.fetch(guildId);
     if (!found) throw new Error(`Discord has no server with the identifier ${guildId}.`);
     return found as unknown as {
-      members: { me: { permissions: unknown } | null };
+      members: {
+        me: { permissions: unknown } | null;
+        fetch: (memberId: string) => Promise<GuildMember>;
+      };
       scheduledEvents: {
         create: (payload: Record<string, unknown>) => Promise<{ id: string }>;
         edit: (id: string, payload: Record<string, unknown>) => Promise<unknown>;
@@ -744,6 +913,61 @@ export function createDiscordActions(client: Client): DiscordActions {
 
     async deleteScheduledEvent(guildId, scheduledEventId) {
       await (await guild(guildId)).scheduledEvents.delete(scheduledEventId);
+    },
+
+    async postPoll(channelId, poll) {
+      const posted = await (await channel(channelId)).send({
+        content: poll.content,
+        poll: {
+          question: { text: poll.question },
+          answers: poll.answers.map(text => ({ text })),
+          duration: poll.durationHours,
+          allowMultiselect: Boolean(poll.allowMultiselect),
+        },
+      });
+      return String(posted.id);
+    },
+
+    async readPoll(channelId, messageId) {
+      const held = (await message(channelId, messageId)).poll;
+      if (!held) return null;
+      return {
+        finalized: Boolean(held.resultsFinalized),
+        answers: [...(held.answers?.values() ?? [])].map(answer => ({
+          text: String(answer.text ?? ''),
+          votes: Number(answer.voteCount ?? 0),
+        })),
+      };
+    },
+
+    /**
+     * The two role calls. A person who has left the server is answered with
+     * false rather than an error, because there is nothing there to put right
+     * and a reconciliation that threw on one departed member would stop for
+     * everybody behind them.
+     */
+    async addRole(guildId, discordUserId, roleId) {
+      let member: GuildMember;
+      try {
+        member = await (await guild(guildId)).members.fetch(discordUserId);
+      } catch (err) {
+        if (isMissingMember(err)) return false;
+        throw err;
+      }
+      await member.roles.add(roleId);
+      return true;
+    },
+
+    async removeRole(guildId, discordUserId, roleId) {
+      let member: GuildMember;
+      try {
+        member = await (await guild(guildId)).members.fetch(discordUserId);
+      } catch (err) {
+        if (isMissingMember(err)) return false;
+        throw err;
+      }
+      await member.roles.remove(roleId);
+      return true;
     },
 
     async permissionsIn(guildId) {

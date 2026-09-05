@@ -29,6 +29,13 @@
       "when": 1788585467783,
       "tag": "0003_guild_digest_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1788596071265,
+      "tag": "0004_boards",
+      "breakpoints": true
     }
   ]
 }

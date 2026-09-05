@@ -1,12 +1,12 @@
 import { vi } from 'vitest';
-import type { Interaction } from '../../src/discord/adapter.ts';
+import type { Interaction, PollDraft, Reply } from '../../src/discord/adapter.ts';
 import type { CommandContext } from '../../src/commands/index.ts';
 import { createFakeViaClient, type FakeViaClient } from '../../src/via/fake.ts';
 import { featureById, type ChannelPurpose } from '../../src/features/registry.ts';
 import type { RateDecision, RateTier } from '../../src/ratelimit/windows.ts';
 import type {
   BindingChoice, GuildBinding, GuildInstallation, GuildKind, GuildMessage,
-  GuildMessagePurpose, GuildStore, PostedMessageRef, RemovedRows,
+  GuildMessagePurpose, GuildStore, MappedRole, PostedMessageRef, RemovedRows,
 } from '../../src/guilds/store.ts';
 import type { FeedStore } from '../../src/feed/store.ts';
 import { memoryFeedStore } from '../support/feed.ts';
@@ -44,6 +44,7 @@ export function memoryGuildStore(): GuildStore {
     kind: GuildKind | null;
     binding: GuildBinding | null;
     rsoId: number | null;
+    boundBy: string | null;
     installedBy: string;
     digestDay: number;
     digestHour: number;
@@ -51,6 +52,7 @@ export function memoryGuildStore(): GuildStore {
     digestPinned: boolean;
   }>();
   const features = new Map<string, Map<string, boolean>>();
+  const roleMappings = new Map<string, Map<MappedRole, string>>();
   const channels = new Map<string, Map<string, string>>();
   const followed = new Map<string, number[]>();
   const messages = new Map<string, GuildMessage>();
@@ -72,6 +74,7 @@ export function memoryGuildStore(): GuildStore {
         kind: null,
         binding: null,
         rsoId: null,
+        boundBy: null,
         installedBy,
         digestDay: 0,
         digestHour: 18,
@@ -87,6 +90,7 @@ export function memoryGuildStore(): GuildStore {
         kind: row.kind,
         binding: row.binding,
         rsoId: row.rsoId,
+        boundBy: row.boundBy,
         installedBy: row.installedBy,
         installedAt: '2026-09-05 09:00:00',
         mirrorWindowDays: 14,
@@ -107,6 +111,7 @@ export function memoryGuildStore(): GuildStore {
       if (!row) return;
       row.binding = choice.binding;
       row.rsoId = choice.binding === 'rso' ? (choice.rsoId ?? null) : null;
+      row.boundBy = choice.binding === 'rso' ? (choice.boundBy ?? null) : null;
     },
     async isFeatureEnabled(guildId, featureId) {
       const held = featuresOf(guildId).get(featureId);
@@ -189,6 +194,16 @@ export function memoryGuildStore(): GuildStore {
     async removeGuildMessage(guildId, purpose) {
       messages.delete(messageKey(guildId, purpose));
     },
+    async setRoleMapping(guildId, membershipRole, roleId) {
+      if (!roleMappings.has(guildId)) roleMappings.set(guildId, new Map());
+      roleMappings.get(guildId)!.set(membershipRole, roleId);
+    },
+    async unsetRoleMapping(guildId, membershipRole) {
+      roleMappings.get(guildId)?.delete(membershipRole);
+    },
+    async listRoleMappings(guildId) {
+      return Object.fromEntries(roleMappings.get(guildId) ?? new Map()) as Partial<Record<MappedRole, string>>;
+    },
     async removeGuild(guildId) {
       const removed: RemovedRows = {
         features: featuresOf(guildId).size,
@@ -197,6 +212,7 @@ export function memoryGuildStore(): GuildStore {
         installation: installations.delete(guildId),
       };
       features.delete(guildId);
+      roleMappings.delete(guildId);
       channels.delete(guildId);
       followed.delete(guildId);
       for (const held of [...messages.values()].filter(one => one.guildId === guildId)) {
@@ -210,6 +226,10 @@ export function memoryGuildStore(): GuildStore {
 export interface TestContext {
   context: CommandContext;
   via: FakeViaClient;
+  /** Every message the context was asked to post into a channel, in order. */
+  posted: Array<{ channelId: string; reply: Reply }>;
+  /** Every poll the context was asked to open, in order. */
+  pollsPosted: Array<{ channelId: string; poll: PollDraft }>;
   directMessages: Array<{ discordUserId: string; content: string }>;
   scheduled: Array<() => Promise<void>>;
   deleted: string[];
@@ -232,6 +252,8 @@ export function testContext(options: {
   feed?: FeedStore;
 } = {}): TestContext {
   const via = createFakeViaClient();
+  const posted: Array<{ channelId: string; reply: Reply }> = [];
+  const pollsPosted: Array<{ channelId: string; poll: PollDraft }> = [];
   const directMessages: Array<{ discordUserId: string; content: string }> = [];
   const scheduled: Array<() => Promise<void>> = [];
   const deleted: string[] = [];
@@ -258,10 +280,21 @@ export function testContext(options: {
     sendDirectMessage: async (discordUserId: string, content: string) => {
       directMessages.push({ discordUserId, content });
     },
+    postMessage: async (channelId: string, reply: Reply) => {
+      posted.push({ channelId, reply });
+      return '800000000000000001';
+    },
+    postPoll: async (channelId: string, poll: PollDraft) => {
+      pollsPosted.push({ channelId, poll });
+      return '800000000000000001';
+    },
     schedule: (task: () => Promise<void>) => { scheduled.push(task); },
     now: () => clock,
     sleep: async (milliseconds: number) => { clock = new Date(clock.getTime() + milliseconds); },
   };
 
-  return { context, via, guilds, feed, directMessages, scheduled, deleted, consumed, clockAt: () => clock };
+  return {
+    context, via, guilds, feed, posted, pollsPosted, directMessages, scheduled, deleted,
+    consumed, clockAt: () => clock,
+  };
 }

@@ -612,6 +612,153 @@ describe('the campus lookups', () => {
     expect((failure as ViaError).message).toBe('A window can cover at most 7 days.');
   });
 
+  /**
+   * The acting endpoints, which are the ones a board member reaches through
+   * the bot. Every one of them carries the acting header and nothing else that
+   * says who is asking, because the web platform resolves the Discord account
+   * to a NetID through its own link table and decides from there.
+   */
+  it('postpones an event as the acting person, sending the two times and the reason', async () => {
+    const { via, calls } = client([json(200, fixture('acting.postpone.json'))]);
+    const event = await via.postponeEvent(10, {
+      startTime: '2026-09-17 18:00:00',
+      endTime: '2026-09-17 19:00:00',
+      reason: 'The room flooded.',
+    }, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/10/postpone`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe('204255221017214977');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({
+      start_time: '2026-09-17 18:00:00',
+      end_time: '2026-09-17 19:00:00',
+      reason: 'The room flooded.',
+    });
+    expect(event!.eventId).toBe(10);
+    expect(event!.startTime).toBe('2026-09-10T18:00:00-05:00');
+  });
+
+  it('sends no reason when the board gave none', async () => {
+    const { via, calls } = client([json(200, fixture('acting.postpone.json'))]);
+    await via.postponeEvent(10, {
+      startTime: '2026-09-17 18:00:00',
+      endTime: '2026-09-17 19:00:00',
+    }, '204255221017214977');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({
+      start_time: '2026-09-17 18:00:00',
+      end_time: '2026-09-17 19:00:00',
+    });
+  });
+
+  it('cancels an event and answers with the moment it was cancelled at', async () => {
+    const { via, calls } = client([json(200, fixture('acting.cancel.json'))]);
+    const cancelledAt = await via.cancelEvent(10, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/10/cancel`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(cancelledAt).toBe('2026-09-05T12:00:00-05:00');
+  });
+
+  it('changes only the fields the caller named on an event', async () => {
+    const { via, calls } = client([json(200, fixture('acting.patch.json'))]);
+    const event = await via.patchEvent(10, { locationNote: 'Use the north entrance.' }, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/10`);
+    expect(calls[0]!.method).toBe('PATCH');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ location_note: 'Use the north entrance.' });
+    expect(event!.locationNote).toBe('Use the north entrance.');
+  });
+
+  it('clears a note and a description with null rather than leaving them out', async () => {
+    const { via, calls } = client([json(200, fixture('acting.patch.json'))]);
+    await via.patchEvent(10, { description: null, locationNote: null }, '204255221017214977');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ description: null, location_note: null });
+  });
+
+  it('switches an event between public and internal', async () => {
+    const { via, calls } = client([json(200, fixture('acting.patch.json'))]);
+    await via.patchEvent(10, { isPrivate: true }, '204255221017214977');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ is_private: true });
+  });
+
+  it('asks the scheduler the same question the dashboard asks, and reads its answer', async () => {
+    const { via, calls } = client([json(200, fixture('scheduler.recommend.json'))]);
+    const answer = await via.recommendSchedule({
+      rsoId: 1,
+      durationMinutes: 60,
+      dateRange: { start: '2026-09-14', end: '2026-09-21' },
+      timeConstraint: { startHour: 18, endHour: 22 },
+      recurrence: { intervalWeeks: 1, daysOfWeek: [], until: '2026-12-09' },
+    }, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/scheduler/recommend`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({
+      rso_id: 1,
+      durationMinutes: 60,
+      dateRange: { start: '2026-09-14', end: '2026-09-21' },
+      timeConstraint: { startHour: 18, endHour: 22, tier: 'required' },
+      recurrence: { intervalWeeks: 1, daysOfWeek: [], until: '2026-12-09' },
+    });
+
+    expect(answer.curatedPicks).toHaveLength(2);
+    expect(answer.curatedPicks[0]).toMatchObject({
+      startTime: '2026-09-16 18:00:00',
+      endTime: '2026-09-16 19:00:00',
+      score: 91,
+      locationId: 5,
+      building: 'Electrical & Computer Eng Bldg',
+      roomNumber: '1002',
+      weeksTotal: 13,
+      weeksClear: 12,
+    });
+    expect(answer.curatedPicks[0]!.reasons).toContain('This room is free for 12 of 13 weeks');
+    expect(answer.curatedPicks[0]!.daysOfWeek).toEqual(['Wed']);
+    expect(answer.curatedPicks[0]!.until).toBe('2026-12-09');
+    expect(answer.allOptions).toHaveLength(2);
+  });
+
+  it('creates a repeat as the dashboard form does, and answers with what it created', async () => {
+    const { via, calls } = client([json(201, fixture('acting.series.json'))]);
+    const created = await via.createEventSeries({
+      rsoId: 1,
+      title: 'Weekly meeting',
+      startTime: '2026-09-14 18:00:00',
+      endTime: '2026-09-14 19:00:00',
+      locationId: 5,
+      recurrence: { intervalWeeks: 1, daysOfWeek: ['MO'], endsOn: '2026-09-28' },
+    }, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/series`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.body!)).toEqual({
+      rso_id: 1,
+      title: 'Weekly meeting',
+      start_time: '2026-09-14 18:00:00',
+      end_time: '2026-09-14 19:00:00',
+      location_id: 5,
+      recurrence: { interval_weeks: 1, days_of_week: ['MO'], ends_on: '2026-09-28' },
+    });
+    expect(created).toEqual({ seriesId: 4, eventIds: [10, 11, 12], created: 3, skipped: [] });
+  });
+
+  it('reads the members of an organization as the acting person, with their roles lowered', async () => {
+    const { via, calls } = client([json(200, fixture('rsoMembers.json'))]);
+    const members = await via.listRsoMembers(1, '204255221017214977');
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/rsos/1/members`);
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe('204255221017214977');
+    expect(members).toEqual([{ netId: 'alice', fullName: 'Alice Adams', role: 'board' }]);
+  });
+
+  it('turns a refusal of an acting call into the typed error, with the sentence the web platform wrote', async () => {
+    const { via } = client([json(403, fixture('error.forbidden.json'))]);
+    const failure = await via.cancelEvent(10, '204255221017214977')
+      .then(() => null, (err: unknown) => err);
+    expect(failure).toBeInstanceOf(ViaError);
+    expect((failure as ViaError).code).toBe('forbidden');
+  });
+
   it('looks a building code up, and answers with nothing for a code VIA does not know', async () => {
     const { via, calls } = client([
       json(200, fixture('building.json')),

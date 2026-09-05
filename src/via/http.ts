@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, calendarRsosBody, eventQueryParams, interestBody, midtermQueryParams,
-  parseBuilding, parseCourses, parseEvent, parseEventPage, parseFreeRooms, parseInterestAnswer,
-  parseLinkSession, parseLinkedAccount, parseLocations, parseMidterms, parseOutboxPage,
-  parsePersonalCalendar, parseRsoWithEvents, parseRsos,
+  ViaError, ViaBusyError, calendarRsosBody, eventChangesBody, eventQueryParams, interestBody,
+  midtermQueryParams, parseActingEvent, parseBuilding, parseCourses, parseEvent, parseEventPage,
+  parseFreeRooms, parseInterestAnswer, parseLinkSession, parseLinkedAccount, parseLocations,
+  parseMidterms, parseOutboxPage, parsePersonalCalendar, parseRsoMembers, parseRsoWithEvents,
+  parseRsos, parseScheduleRecommendations, parseSeriesCreated, postponementBody,
+  scheduleRequestBody, seriesRequestBody,
   type ViaClient, type ViaErrorCode, type Building, type CampusLocation, type Course,
-  type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer,
-  type InterestSignal, type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery,
-  type OutboxPage, type OutboxQuery, type PersonalCalendar, type Rso, type RsoWithEvents,
-  type ViaEvent,
+  type EventChanges, type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery,
+  type InterestAnswer, type InterestSignal, type LinkSession, type LinkedAccount, type Midterm,
+  type MidtermQuery, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement,
+  type Rso, type RsoMember, type RsoWithEvents, type ScheduleRecommendations, type ScheduleRequest,
+  type SeriesCreated, type SeriesRequest, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -420,6 +423,90 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
         path: `/buildings/${encodeURIComponent(code)}`,
       });
       return body === null ? null : parseBuilding(body);
+    },
+
+    /**
+     * The acting endpoints.
+     *
+     * Each of these runs the controller the dashboard's own route runs, so a
+     * board member who postpones a meeting from Discord and one who postpones
+     * it from the website get the same checks and the same refusals. Nothing
+     * here decides anything: the acting header names the Discord account, and
+     * the web platform answers.
+     */
+    async postponeEvent(
+      eventId: number,
+      postponement: Postponement,
+      actingDiscordUserId: string,
+    ): Promise<ViaEvent | null> {
+      return parseActingEvent(await request<unknown>({
+        method: 'POST',
+        path: `/events/${encodeURIComponent(String(eventId))}/postpone`,
+        body: postponementBody(postponement),
+        actingDiscordUserId,
+      }));
+    },
+
+    async cancelEvent(eventId: number, actingDiscordUserId: string): Promise<string | null> {
+      const body = await request<Record<string, unknown>>({
+        method: 'POST',
+        path: `/events/${encodeURIComponent(String(eventId))}/cancel`,
+        body: {},
+        actingDiscordUserId,
+      });
+      const cancelledAt = body?.cancelled_at;
+      return cancelledAt === null || cancelledAt === undefined ? null : String(cancelledAt);
+    },
+
+    async patchEvent(
+      eventId: number,
+      changes: EventChanges,
+      actingDiscordUserId: string,
+    ): Promise<ViaEvent | null> {
+      return parseActingEvent(await request<unknown>({
+        method: 'PATCH',
+        path: `/events/${encodeURIComponent(String(eventId))}`,
+        body: eventChangesBody(changes),
+        actingDiscordUserId,
+      }));
+    },
+
+    async recommendSchedule(
+      scheduleRequest: ScheduleRequest,
+      actingDiscordUserId: string,
+    ): Promise<ScheduleRecommendations> {
+      return parseScheduleRecommendations(await request<unknown>({
+        method: 'POST',
+        path: '/scheduler/recommend',
+        body: scheduleRequestBody(scheduleRequest),
+        actingDiscordUserId,
+      }));
+    },
+
+    async createEventSeries(
+      seriesRequest: SeriesRequest,
+      actingDiscordUserId: string,
+    ): Promise<SeriesCreated> {
+      return parseSeriesCreated(await request<unknown>({
+        method: 'POST',
+        path: '/events/series',
+        body: seriesRequestBody(seriesRequest),
+        actingDiscordUserId,
+      }));
+    },
+
+    /**
+     * The members of an organization, which the reading router lets only a
+     * board member of it read. The bot reads it for role reconciliation and
+     * writes down none of what comes back beyond the Discord accounts it can
+     * already name.
+     */
+    async listRsoMembers(rsoId: number, actingDiscordUserId: string): Promise<RsoMember[]> {
+      return parseRsoMembers(await request<unknown>({
+        method: 'GET',
+        path: `/rsos/${encodeURIComponent(String(rsoId))}/members`,
+        actingDiscordUserId,
+      }));
     },
 
     /**

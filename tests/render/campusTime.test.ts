@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   campusDate, campusDatePlus, campusDateTime, campusStamp, campusTimeOfDay, campusToday,
-  relativeTimestamp, windowRange,
+  campusWallClock, relativeTimestamp, windowRange,
 } from '../../src/render/campusTime.ts';
 
 /**
@@ -136,5 +136,25 @@ describe('campus time as the database holds it', () => {
     // from the last Thursday in October still ends on a Thursday.
     const october = new Date('2026-10-29T17:00:00Z');
     expect(campusDatePlus(14, october)).toBe('2026-11-12');
+  });
+});
+
+/**
+ * The wall clock a modal is filled in with. A board member who is moving a
+ * meeting reads the time it runs at now, edits it, and sends it back, so the
+ * shape the box holds is the shape the web platform reads.
+ */
+describe('the campus wall clock a form holds', () => {
+  it('writes a published time as the campus date and time of day', () => {
+    expect(campusWallClock('2026-09-10T18:00:00-05:00')).toBe('2026-09-10 18:00');
+  });
+
+  it('writes a stored wall clock reading back unchanged, to the minute', () => {
+    expect(campusWallClock('2026-09-10 18:00:00')).toBe('2026-09-10 18:00');
+  });
+
+  it('answers with nothing for a reading it cannot make sense of', () => {
+    expect(campusWallClock('tomorrow evening')).toBe('');
+    expect(campusWallClock(null)).toBe('');
   });
 });

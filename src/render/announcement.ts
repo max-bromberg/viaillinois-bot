@@ -38,9 +38,17 @@ function headlineFor(event: ViaEvent, what: string): string {
   return event.rsoName ? `${event.rsoName} has ${what}` : `There is ${what}`;
 }
 
-/** The card with a line above it saying that this event is new. */
+/**
+ * The card with a line above it saying that this event is new.
+ *
+ * Every announcement carries the button that opens the card privately, because
+ * a message a whole channel reads cannot show one person the administrative
+ * actions and another person nothing. Whoever presses it gets the card with
+ * the actions on it, and whether they may use any of them is the web
+ * platform's answer when they do.
+ */
 export function renderEventAnnouncement(event: ViaEvent, options: CardOptions): Reply {
-  const card = renderEventCard(event, options);
+  const card = renderEventCard(event, { ...options, manageable: true });
   const headline = event.rsoName
     ? `**${event.rsoName}** has a new event on VIA.`
     : 'There is a new event on VIA.';
@@ -58,7 +66,7 @@ export function renderSeriesAnnouncement(
   series: ViaSeries,
   options: CardOptions,
 ): Reply {
-  const card = renderEventCard(event, options);
+  const card = renderEventCard(event, { ...options, manageable: true });
   const headline = event.rsoName
     ? `**${event.rsoName}** has a new set of meetings on VIA.`
     : 'There is a new set of meetings on VIA.';
@@ -80,9 +88,14 @@ export function renderSeriesAnnouncement(
 /**
  * The notice that replies to an announcement when the event has moved. It
  * names what changed and what it changed to, so that somebody who read the
- * announcement yesterday does not have to compare two messages.
+ * announcement yesterday does not have to compare two messages, and it carries
+ * the reason when whoever moved it gave one.
  */
-export function renderMoveNotice(event: ViaEvent, changed: readonly string[]): string {
+export function renderMoveNotice(
+  event: ViaEvent,
+  changed: readonly string[],
+  reason: string | null = null,
+): string {
   const timeChanged = changed.some(field => TIME_FIELDS.includes(field));
   const placeChanged = changed.some(field => MOVE_FIELDS.includes(field) && !TIME_FIELDS.includes(field));
 
@@ -96,6 +109,9 @@ export function renderMoveNotice(event: ViaEvent, changed: readonly string[]): s
   return [
     `**${event.title}** ${what}.`,
     `It now runs on ${when}, in ${placeOf(event)}.`,
+    // A board that said why is saying it to the channel, so the notice carries
+    // it rather than leaving people to guess.
+    ...(reason ? [`The reason given: ${reason}`] : []),
     'The announcement above has been updated to match.',
   ].join('\n');
 }

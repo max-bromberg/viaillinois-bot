@@ -75,7 +75,7 @@ export function permissionName(permission: DiscordPermission): string {
 /** How a channel purpose is written, which the registry keeps beside the purposes. */
 export const PURPOSE_LABELS = CHANNEL_PURPOSE_LABELS;
 
-/** How a category of feature is written at the head of its group. */
+/** How a category of feature is written at the head of its page. */
 const CATEGORY_LABELS: Record<FeatureCategory, string> = {
   command: 'Commands',
   proactive: 'Proactive posts',
@@ -83,7 +83,24 @@ const CATEGORY_LABELS: Record<FeatureCategory, string> = {
   administration: 'Administration',
 };
 
-const CATEGORY_ORDER: FeatureCategory[] = ['command', 'proactive', 'roles', 'administration'];
+/** What each page of the features panel is about, for the menu that turns to it. */
+const CATEGORY_SUMMARIES: Record<FeatureCategory, string> = {
+  command: 'What people can ask the bot for.',
+  proactive: 'What the bot posts on its own.',
+  roles: 'The Discord roles the bot gives out.',
+  administration: 'Setting the bot up, and running your events from Discord.',
+};
+
+export const CATEGORY_ORDER: FeatureCategory[] = ['command', 'proactive', 'roles', 'administration'];
+
+/**
+ * What Discord will carry: how long a message may be, and how many rows of
+ * components one message may hold. The registry grows every increment, and a
+ * panel that grows past either of these is a panel nobody can open, so the
+ * features panel is one page per category rather than one message.
+ */
+export const MAX_MESSAGE_LENGTH = 2000;
+export const MAX_ROWS = 5;
 
 /**
  * Why a feature cannot work here, or null when nothing stops it.
@@ -320,44 +337,58 @@ export interface FeatureListState {
   enabled: Record<string, boolean>;
   channels: Partial<Record<ChannelPurpose, string>>;
   permissions: readonly DiscordPermission[];
+  /** Which category the page being drawn is about. */
+  category: FeatureCategory;
 }
 
 /**
- * The feature list, grouped by category, each feature showing whether it is on
- * and, when something stops it working, what that is. The menu beneath it
- * toggles one feature, because Discord has no switch of its own and a menu is
- * the nearest thing to a row of them.
+ * One page of the features panel.
+ *
+ * The registry has more features than Discord will carry in one message or
+ * offer in one menu, so the panel is one page per category: a menu that turns
+ * to another page, a line per feature on this page saying whether it is on and
+ * what stops it when something does, and a menu that switches one of them.
+ * What each feature does is written on the entry in that second menu, which is
+ * where Discord has room for a sentence beside a name.
  */
 export function renderFeatureList(state: FeatureListState): Reply {
+  const inCategory = state.features.filter(feature => feature.category === state.category);
+
   const lines = [
     '**Step 4 of 5: features**',
     '',
-    'Choose a feature to switch it on or off. A feature that cannot work says why underneath.',
+    'Choose a category to see what is in it, then choose a feature to switch it on or off. The feature menu says what each feature does, and a feature that cannot work says why here.',
+    '',
+    `**${CATEGORY_LABELS[state.category]}**`,
   ];
 
-  for (const category of CATEGORY_ORDER) {
-    const inCategory = state.features.filter(feature => feature.category === category);
-    if (inCategory.length === 0) continue;
-    lines.push('', `**${CATEGORY_LABELS[category]}**`);
-    for (const feature of inCategory) {
-      const on = state.enabled[feature.id] ?? feature.defaultEnabled;
-      const blocked = blockedReason(feature, state);
-      lines.push(`- ${on ? 'on' : 'off'}: ${feature.description}`);
-      if (blocked) lines.push(`  This cannot work here because ${blocked}.`);
-    }
+  if (inCategory.length === 0) {
+    lines.push('There is nothing in this category yet.');
+  }
+  for (const feature of inCategory) {
+    const on = state.enabled[feature.id] ?? feature.defaultEnabled;
+    const blocked = blockedReason(feature, state);
+    lines.push(`- ${on ? 'on' : 'off'}: ${feature.id}`);
+    if (blocked) lines.push(`  This cannot work here because ${blocked}.`);
   }
 
-  const options = state.features.slice(0, MAX_MENU_OPTIONS).map(feature => {
-    const on = state.enabled[feature.id] ?? feature.defaultEnabled;
-    return {
-      label: `${on ? 'Switch off' : 'Switch on'}: ${feature.id}`.slice(0, 100),
-      value: feature.id,
-      description: feature.description.slice(0, 100),
-    };
-  });
+  const rows: ReplyRow[] = [{
+    kind: 'row',
+    components: [{
+      kind: 'select',
+      selectKind: 'string',
+      customId: 'setup:category',
+      placeholder: 'Choose a category of features',
+      options: CATEGORY_ORDER.map(category => ({
+        label: CATEGORY_LABELS[category],
+        value: category,
+        description: CATEGORY_SUMMARIES[category],
+        selected: category === state.category,
+      })),
+    }],
+  }];
 
-  const rows: ReplyRow[] = [];
-  if (options.length > 0) {
+  if (inCategory.length > 0) {
     rows.push({
       kind: 'row',
       components: [{
@@ -365,10 +396,18 @@ export function renderFeatureList(state: FeatureListState): Reply {
         selectKind: 'string',
         customId: 'setup:feature',
         placeholder: 'Choose a feature to switch on or off',
-        options,
+        options: inCategory.slice(0, MAX_MENU_OPTIONS).map(feature => {
+          const on = state.enabled[feature.id] ?? feature.defaultEnabled;
+          return {
+            label: `${on ? 'Switch off' : 'Switch on'}: ${feature.id}`.slice(0, 100),
+            value: feature.id,
+            description: feature.summary,
+          };
+        }),
       }],
     });
   }
+
   rows.push({
     kind: 'row',
     components: [
@@ -540,8 +579,17 @@ function answerFor(err: unknown): Reply {
   throw err;
 }
 
-/** The panel for a named step, read fresh from the server's rows. */
-async function panelFor(step: SetupStep, interaction: Interaction, context: CommandContext): Promise<Reply> {
+/**
+ * The panel for a named step, read fresh from the server's rows. The features
+ * panel is one page per category, and the page it opens on is the first
+ * category, which is the commands, unless the caller names another.
+ */
+async function panelFor(
+  step: SetupStep,
+  interaction: Interaction,
+  context: CommandContext,
+  category: FeatureCategory = CATEGORY_ORDER[0]!,
+): Promise<Reply> {
   const state = await readState(interaction, context);
 
   if (step === 'done') return { content: DONE_MESSAGE, components: [] };
@@ -555,6 +603,7 @@ async function panelFor(step: SetupStep, interaction: Interaction, context: Comm
       enabled: await context.guilds.listFeatureChanges(interaction.guildId!),
       channels: state.channels,
       permissions: state.permissions,
+      category,
     });
   }
   return menuPanel(state, await boundRsoName(state, context));
@@ -598,7 +647,14 @@ async function bindToRso(
     return answerFor(err);
   }
 
-  await context.guilds.setBinding(interaction.guildId!, { binding: 'rso', rsoId });
+  // The web platform has just confirmed that this person may speak for the
+  // organization, which is exactly the person the daily role reconciliation
+  // has to read its members as, so the server writes down who they were.
+  await context.guilds.setBinding(interaction.guildId!, {
+    binding: 'rso',
+    rsoId,
+    boundBy: interaction.userId,
+  });
   const state = await readState(interaction, context);
   return {
     ...channelsPanel(state, null),
@@ -623,14 +679,14 @@ export async function toggleFeature(
     const blocked = blockedReason(feature, state);
     if (blocked) {
       return {
-        content: `${feature.description}\n\nThis cannot be switched on here because ${blocked}. Fix that first and then switch it on.`,
+        content: `${feature.id}, ${feature.summary}\n\nThis cannot be switched on here because ${blocked}. Fix that first and then switch it on.`,
       };
     }
   }
 
   await context.guilds.setFeatureEnabled(guildId, feature.id, !enabled);
   return {
-    content: `${feature.description}\n\nThis is now ${enabled ? 'off' : 'on'} in this server.`,
+    content: `${feature.id}, ${feature.summary}\n\nThis is now ${enabled ? 'off' : 'on'} in this server.`,
   };
 }
 
@@ -826,6 +882,13 @@ export const setupComponent: ComponentHandler = {
       };
     }
 
+    if (customId === 'setup:category') {
+      const category = CATEGORY_ORDER.includes(chosen as FeatureCategory)
+        ? (chosen as FeatureCategory)
+        : CATEGORY_ORDER[0]!;
+      return panelFor('features', interaction, context, category);
+    }
+
     if (customId === 'setup:feature') {
       const state = await readState(interaction, context);
       let feature: Feature;
@@ -835,7 +898,9 @@ export const setupComponent: ComponentHandler = {
         return panelFor('features', interaction, context);
       }
       const answer = await toggleFeature(feature, guildId, context, state);
-      const panel = await panelFor('features', interaction, context);
+      // The panel comes back on the page the feature belongs to, because that
+      // is the page the manager was reading when they switched it.
+      const panel = await panelFor('features', interaction, context, feature.category);
       return { ...panel, content: `${answer.content}\n\n${panel.content}` };
     }
 
