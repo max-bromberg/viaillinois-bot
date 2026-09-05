@@ -67,6 +67,14 @@ export interface RateWindows {
   consume(subject: string, tier: RateTier): Promise<RateDecision>;
   /** Remove buckets nothing will read again, and say how many went. */
   sweep(): Promise<number>;
+  /**
+   * Remove every bucket older than an instant, and say how many went. This is
+   * the ninety day bound from section 10 of the design, which the housekeeping
+   * job asks for. It takes an instant rather than a wall clock reading because
+   * bucket_start is the one column in this database that holds UTC, and the
+   * conversion belongs here rather than in the caller.
+   */
+  pruneBefore(before: Date): Promise<number>;
 }
 
 export interface RateWindowOptions {
@@ -154,6 +162,11 @@ export function createRateWindows(options: RateWindowOptions): RateWindows {
         .onDuplicateKeyUpdate({ set: { count: sql`${rateWindows.count} + 1` } });
 
       return { allowed: true, used, limit, retryAfterSeconds: 0 };
+    },
+
+    async pruneBefore(before: Date): Promise<number> {
+      const result = await db.delete(rateWindows).where(lt(rateWindows.bucketStart, bucketOf(before)));
+      return (result as unknown as [{ affectedRows: number }])[0].affectedRows;
     },
 
     async sweep(): Promise<number> {

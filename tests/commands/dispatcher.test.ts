@@ -2,11 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ApplicationCommandOptionType, InteractionContextType, InteractionType, MessageFlags,
 } from 'discord.js';
-import { createDispatcher, handlers, UNKNOWN_COMMAND_MESSAGE } from '../../src/commands/index.ts';
+import {
+  answersOnlyThePerson, createDispatcher, handlers, UNKNOWN_COMMAND_MESSAGE,
+} from '../../src/commands/index.ts';
 import { buildCommands } from '../../src/discord/registerCommands.ts';
 import { FAILURE_MESSAGE } from '../../src/discord/adapter.ts';
 import type { RateDecision, RateTier } from '../../src/ratelimit/windows.ts';
-import { testContext } from './support.ts';
+import { interaction, testContext } from './support.ts';
 
 /**
  * The dispatcher is tested through the adapter, on interaction shaped plain
@@ -277,6 +279,43 @@ describe('completing an option as a person types', () => {
     const raw = rawAutocomplete();
     await expect(createDispatcher(context)(raw)).resolves.toBeUndefined();
     expect(raw.respond).toHaveBeenCalledWith([]);
+  });
+});
+
+/**
+ * Section 6.8 of the design: the application is published with both
+ * installation contexts, so a person who installed it to their own account can
+ * use it in a server that has not. The bot was not invited into that server's
+ * channels, so what it says there is said to the person who asked and to
+ * nobody else, whatever the handler would otherwise have chosen.
+ */
+describe('answering in a server that has not installed the bot', () => {
+  const handler = { ephemeral: false };
+
+  const inServer = (installedInServer: boolean) => ({
+    ...interaction({ context: 'guild' as const }),
+    installedInServer,
+  });
+
+  it('answers only the person who asked', () => {
+    expect(answersOnlyThePerson(handler, inServer(false))).toBe(true);
+  });
+
+  it('leaves a server that has installed the bot to the handler', () => {
+    expect(answersOnlyThePerson(handler, inServer(true))).toBe(false);
+  });
+
+  it('answers only the person whenever the handler asked for that anyway', () => {
+    expect(answersOnlyThePerson({ ephemeral: true }, inServer(true))).toBe(true);
+  });
+
+  it('takes a component handler that says nothing as one that answers only the person', () => {
+    expect(answersOnlyThePerson({}, inServer(true))).toBe(true);
+  });
+
+  it('leaves the bot direct messages to the handler, where nobody else is reading anyway', () => {
+    const dm = { ...interaction({ context: 'botDm' as const, guildId: null }), installedInServer: true };
+    expect(answersOnlyThePerson(handler, dm)).toBe(false);
   });
 });
 

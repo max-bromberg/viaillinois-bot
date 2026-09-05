@@ -25,6 +25,7 @@ import {
 } from './admin.ts';
 import { scheduleCommand, schedulerComponent, schedulerAcceptComponent } from './scheduler.ts';
 import { rolesCommand, rolesComponent } from './roles.ts';
+import { feedbackComponent, feedbackCommentComponent } from './feedback.ts';
 
 export { describeWait } from './types.ts';
 export type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
@@ -85,8 +86,8 @@ export const handlers: readonly CommandHandler[] = [
 
 /**
  * Every component the bot answers. The first handler whose prefix the
- * identifier begins with answers it, so the order here matters only if two
- * prefixes overlap, and no two of them do.
+ * identifier begins with answers it, so the order here matters wherever one
+ * prefix sits inside another, which the comments below name.
  */
 export const componentHandlers: readonly ComponentHandler[] = [
   linkComponent,
@@ -102,6 +103,11 @@ export const componentHandlers: readonly ComponentHandler[] = [
   schedulerAcceptComponent,
   schedulerComponent,
   rolesComponent,
+  // The comment handler comes before the one its prefix sits inside, for the
+  // same reason the administrative form handler does: the first prefix that
+  // matches answers, and only one of the two can open a form.
+  feedbackCommentComponent,
+  feedbackComponent,
 ];
 
 export const UNKNOWN_COMMAND_MESSAGE =
@@ -120,6 +126,25 @@ export const GUILD_LIMIT_MESSAGE = 'This server has run too many VIA commands in
  */
 export function tierOf(handler: CommandHandler | ComponentHandler): RateTier {
   return featureById(handler.featureId).tier === 'read' ? 'unlinked' : 'linked';
+}
+
+/**
+ * Whether the answer is shown only to the person who asked.
+ *
+ * The handler chooses, except in one case that overrules it. Section 6.8 of
+ * the design publishes the application with both installation contexts, so
+ * somebody who installed the bot to their own account can use it in a server
+ * that has not installed it. The bot was not invited into that server's
+ * channels, so its answer there is shown to the person who asked and to
+ * nobody else. Everywhere else the handler's own choice stands, and a
+ * component handler that says nothing answers only the person, which is what
+ * a button on a message a whole channel reads has to do.
+ */
+export function answersOnlyThePerson(
+  handler: { ephemeral?: boolean },
+  interaction: Pick<Interaction, 'installedInServer'>,
+): boolean {
+  return handler.ephemeral !== false || !interaction.installedInServer;
 }
 
 /**
@@ -234,7 +259,11 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       // said about an interaction. A form sent back is a new interaction, so
       // the answer to one is acknowledged like any other.
       if (handler.opensModal && interaction.kind !== 'modal') {
-        await answerOrShowModal(raw, handler.ephemeral !== false, () => handler.run(interaction, context));
+        await answerOrShowModal(
+          raw,
+          answersOnlyThePerson(handler, interaction),
+          () => handler.run(interaction, context),
+        );
         return;
       }
 
@@ -242,7 +271,11 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
         await respondByUpdate(raw, () => handler.run(interaction, context));
         return;
       }
-      await respond(raw, { ephemeral: handler.ephemeral !== false }, () => handler.run(interaction, context));
+      await respond(
+        raw,
+        { ephemeral: answersOnlyThePerson(handler, interaction) },
+        () => handler.run(interaction, context),
+      );
       return;
     }
 
@@ -257,10 +290,18 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
     if (!(await withinLimits(interaction, tierOf(handler), raw))) return;
 
     if (handler.opensModal) {
-      await answerOrShowModal(raw, handler.ephemeral, () => handler.run(interaction, context));
+      await answerOrShowModal(
+        raw,
+        answersOnlyThePerson(handler, interaction),
+        () => handler.run(interaction, context),
+      );
       return;
     }
 
-    await respond(raw, { ephemeral: handler.ephemeral }, () => handler.run(interaction, context));
+    await respond(
+      raw,
+      { ephemeral: answersOnlyThePerson(handler, interaction) },
+      () => handler.run(interaction, context),
+    );
   };
 }

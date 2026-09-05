@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createInterestRecorder } from '../../src/mirror/interest.ts';
 import { createFakeViaClient } from '../../src/via/fake.ts';
 import { memoryEventMirrors } from '../support/proactive.ts';
+import { memoryInterestMarks } from '../support/feed.ts';
 
 /**
  * Interest left on a scheduled event.
@@ -22,9 +23,10 @@ describe('recording interest from the Events tab', () => {
   async function built() {
     const via = createFakeViaClient();
     const mirrors = memoryEventMirrors();
+    const marks = memoryInterestMarks();
     await mirrors.recordScheduledEvent(GUILD, 10, SCHEDULED);
-    const record = createInterestRecorder({ via, mirrors });
-    return { via, mirrors, record };
+    const record = createInterestRecorder({ via, mirrors, marks });
+    return { via, mirrors, marks, record };
   }
 
   const signal = (overrides: Record<string, unknown> = {}) => ({
@@ -77,6 +79,41 @@ describe('recording interest from the Events tab', () => {
     const { via, record } = await built();
     await record(signal({ guildId: null }), true);
     expect(via.interests).toEqual([]);
+  });
+
+  /**
+   * The bot writes down who marked interest, by Discord account, because the
+   * feedback request the morning after has to reach them and the web platform
+   * holds interest by NetID. It is written only once the web platform has
+   * taken the signal, so the two cannot disagree.
+   */
+  it('writes down who marked interest, so that the morning after can reach them', async () => {
+    const { via, marks, record } = await built();
+    via.seedLink(ROSA);
+    await record(signal(), true);
+    expect(await marks.listPeople(10)).toEqual([ROSA]);
+  });
+
+  it('forgets the mark when a member takes their interest back', async () => {
+    const { via, marks, record } = await built();
+    via.seedLink(ROSA);
+    await record(signal(), true);
+    await record(signal(), false);
+    expect(await marks.listPeople(10)).toEqual([]);
+  });
+
+  it('writes down the mark for somebody who is not linked as well, since they may link later', async () => {
+    const { marks, record } = await built();
+    await record(signal(), true);
+    expect(await marks.listPeople(10)).toEqual([ROSA]);
+  });
+
+  it('writes nothing down when VIA did not take the signal', async () => {
+    const { via, marks, record } = await built();
+    via.seedLink(ROSA);
+    via.failNextWith(new Error('VIA did not answer'));
+    await record(signal(), true);
+    expect(await marks.listPeople(10)).toEqual([]);
   });
 
   it('carries on when VIA refuses, because one interest signal is not worth a failure', async () => {

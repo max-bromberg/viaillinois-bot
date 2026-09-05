@@ -4,6 +4,7 @@ import {
   parseLocations, parseMidterms, parseOutboxEntry, parsePersonalCalendar, parseRsoMembers,
   parseRsos, parseScheduleRecommendations,
   type ViaClient, type Building, type CampusLocation, type Course, type EventChanges,
+  type EventFeedback,
   type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer,
   type InterestSignal, type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery,
   type OutboxEntry, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement,
@@ -107,6 +108,14 @@ export interface RecordedInterest {
   discordUserId?: string;
 }
 
+/** One answer somebody gave about an event, as the fake holds it. */
+export interface RecordedFeedback {
+  eventId: number;
+  rating: number;
+  comment: string | null;
+  actingDiscordUserId: string;
+}
+
 /** One postponement the fake was given, as it was given. */
 export interface RecordedPostponement {
   eventId: number;
@@ -126,6 +135,8 @@ export interface FakeViaClient extends ViaClient {
   readonly calls: string[];
   /** Every interest signal the fake was given, in order. */
   readonly interests: RecordedInterest[];
+  /** What each person said about each event, with the last answer winning. */
+  readonly feedback: RecordedFeedback[];
   /**
    * Add one outbox entry, built from the recorded entry of that kind, with
    * the next identifier. Anything the test names replaces what the recording
@@ -203,6 +214,12 @@ export function createFakeViaClient(): FakeViaClient {
   const events = new Map<number, ViaEvent>([[RECORDED_EVENT.eventId, { ...RECORDED_EVENT }]]);
   const outbox: OutboxEntry[] = [];
   const interests: RecordedInterest[] = [];
+  /**
+   * What people said about events. The web platform holds one answer per
+   * person and event and replaces it when they answer again, so the fake does
+   * the same rather than keeping a history nothing reads.
+   */
+  const given: RecordedFeedback[] = [];
   /** Who has marked interest in each event, so that one person counts once. */
   const interested = new Map<number, Set<string>>();
   const calendars = new Map<string, SeededPersonalCalendar>();
@@ -372,6 +389,7 @@ export function createFakeViaClient(): FakeViaClient {
     sessions,
     calls,
     interests,
+    feedback: given,
 
     seedOutbox(kind, overrides = {}) {
       const recorded = RECORDED_OUTBOX.get(kind);
@@ -517,6 +535,7 @@ export function createFakeViaClient(): FakeViaClient {
       calls.length = 0;
       outbox.length = 0;
       interests.length = 0;
+      given.length = 0;
       interested.clear();
       healthy = true;
       nextFailure = null;
@@ -860,6 +879,36 @@ export function createFakeViaClient(): FakeViaClient {
       const event = eventFor(eventId, actingDiscordUserId);
       event.cancelledAt = '2026-09-05T12:00:00-05:00';
       return event.cancelledAt;
+    },
+
+    /**
+     * What one person thought of an event. Anybody linked may answer, which is
+     * the web platform's rule rather than an editor's, and answering twice
+     * replaces the first answer.
+     */
+    async recordFeedback(eventId: number, feedback: EventFeedback, actingDiscordUserId: string) {
+      throwIfInstructed();
+      calls.push('recordFeedback');
+      if (!links.get(actingDiscordUserId)) {
+        throw new ViaError('This Discord account is not linked to a VIA account.', 403, 'not_linked');
+      }
+      if (!events.get(eventId)) {
+        throw new ViaError('There is no event with that identifier.', 404, 'not_found');
+      }
+      if (!Number.isInteger(feedback.rating) || feedback.rating < 1 || feedback.rating > 5) {
+        throw new ViaError('A rating has to be a whole number from one to five.', 400, 'invalid');
+      }
+
+      const held = given.findIndex(one =>
+        one.eventId === eventId && one.actingDiscordUserId === actingDiscordUserId);
+      const answer: RecordedFeedback = {
+        eventId,
+        rating: feedback.rating,
+        comment: feedback.comment ?? null,
+        actingDiscordUserId,
+      };
+      if (held >= 0) given[held] = answer;
+      else given.push(answer);
     },
 
     async patchEvent(eventId: number, changes: EventChanges, actingDiscordUserId: string) {

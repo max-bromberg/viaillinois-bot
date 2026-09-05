@@ -59,5 +59,6 @@ Times carry the campus offset, as the public API sends them.
 | `acting.postpone.json` | `POST /events/{id}/postpone`, the event as it stands after it was moved |
 | `acting.cancel.json` | `POST /events/{id}/cancel`, with the moment the event was cancelled at |
 | `acting.patch.json` | `PATCH /events/{id}`, the event as it stands after its description, its visibility or its location note was changed |
+| `acting.feedback.json` | `POST /events/{id}/feedback`, the answer to recording what one person thought of an event |
 | `acting.series.json` | `POST /events/series`, the repeat that was created, with the events it holds and the dates it skipped |
 | `scheduler.recommend.json` | `POST /scheduler/recommend`, recorded by the web platform as acting.recommend.json in the shape the scheduler service answers with |

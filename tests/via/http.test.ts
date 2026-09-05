@@ -463,6 +463,40 @@ describe('recording interest in an event', () => {
 });
 
 /**
+ * What somebody thought of an event they went to, from section 6.4 of the
+ * design. Anybody linked may say so, once per event, and saying it again
+ * replaces what they said before, which the web platform does rather than the
+ * bot. The bot sends the score and, when the person wrote one, the comment.
+ */
+describe('recording feedback on an event', () => {
+  const ADA = '204255221017214977';
+
+  it('sends the score as the acting person', async () => {
+    const { via, calls } = client([json(200, fixture('acting.feedback.json'))]);
+    await via.recordFeedback(10, { rating: 4 }, ADA);
+
+    expect(calls[0]!.url).toBe(`http://via:3001${INTERNAL_PREFIX}/events/10/feedback`);
+    expect(calls[0]!.method).toBe('POST');
+    expect(calls[0]!.headers['x-via-acting-discord-user']).toBe(ADA);
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ rating: 4 });
+  });
+
+  it('sends the comment beside the score when the person wrote one', async () => {
+    const { via, calls } = client([json(200, fixture('acting.feedback.json'))]);
+    await via.recordFeedback(10, { rating: 5, comment: 'The room was easy to find.' }, ADA);
+    expect(JSON.parse(calls[0]!.body!)).toEqual({ rating: 5, comment: 'The room was easy to find.' });
+  });
+
+  it('turns the refusal for an account VIA no longer knows into the not_linked error', async () => {
+    const { via } = client([json(403, fixture('error.not_linked.json'))]);
+    const failure = await via.recordFeedback(10, { rating: 3 }, ADA)
+      .then(() => null, (err: unknown) => err);
+    expect(failure).toBeInstanceOf(ViaError);
+    expect((failure as ViaError).code).toBe('not_linked');
+  });
+});
+
+/**
  * The personal calendar, from section 6 of the companion specification. The
  * address carries a token the web platform stores hashed, so asking for the
  * calendar again rotates the token, and the organizations it carries are

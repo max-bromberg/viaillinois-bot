@@ -160,6 +160,21 @@ describe('Rate_Windows', () => {
     expect(await db.select().from(rateWindows)).toHaveLength(1);
   });
 
+  /**
+   * The sweep keeps the table small from hour to hour, and section 10 of the
+   * design sets the outer bound: nothing is kept beyond ninety days. The
+   * housekeeping job asks for that bound by an instant, because bucket_start
+   * is the one column in this database that holds UTC.
+   */
+  it('prunes every bucket older than an instant', async () => {
+    const limiter = windows();
+    await limiter.consume(rosa, 'linked');
+
+    expect(await limiter.pruneBefore(new Date('2026-09-05T14:00:00Z'))).toBe(0);
+    expect(await limiter.pruneBefore(new Date('2026-09-06T00:00:00Z'))).toBe(1);
+    expect(await db.select().from(rateWindows)).toEqual([]);
+  });
+
   it('names a subject by the kind of thing it is', () => {
     expect(userSubject('204255221017214977')).toBe('user:204255221017214977');
     expect(guildSubject('900000000000000001')).toBe('guild:900000000000000001');

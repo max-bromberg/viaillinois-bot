@@ -1,6 +1,7 @@
 import {
-  ChannelType, ComponentType, GuildScheduledEventEntityType, GuildScheduledEventPrivacyLevel,
-  InteractionContextType, InteractionType, MessageFlags, PermissionFlagsBits, TextInputStyle,
+  ApplicationIntegrationType, ChannelType, ComponentType, GuildScheduledEventEntityType,
+  GuildScheduledEventPrivacyLevel, InteractionContextType, InteractionType, MessageFlags,
+  PermissionFlagsBits, TextInputStyle,
 } from 'discord.js';
 import type { Client } from 'discord.js';
 import type { DiscordPermission, InteractionContext } from '../features/registry.ts';
@@ -51,6 +52,18 @@ export interface Interaction {
   channelId: string | null;
   /** Where the person is: a server, the bot direct messages, or another private channel. */
   context: InteractionContext;
+  /**
+   * Whether the server this interaction came from has installed the bot.
+   *
+   * Section 6.8 of the design publishes the application with both installation
+   * contexts, so a person who installed it to their own account can use it in
+   * a server that has not added it. Discord says which installation authorized
+   * the interaction, and an interaction authorized only by the person is
+   * answered where only they can see it, because the bot was not invited into
+   * that server's channels. Outside a server there is no server to have
+   * installed anything, so this is true.
+   */
+  installedInServer: boolean;
   /**
    * The permissions the person holds in this server, named as the registry
    * names them. Empty outside a server, where there are no server permissions
@@ -278,6 +291,26 @@ function readContext(raw: { context?: number | null; guildId?: string | null }):
 }
 
 /**
+ * Whether the server an interaction came from has installed the bot.
+ *
+ * Discord names the installations that authorized an interaction, keyed by
+ * installation context, so the server's own installation being among them is
+ * the question. An interaction from outside a server has no server to have
+ * installed anything. An interaction that names no owners at all is read as
+ * installed, because that is every interaction Discord sent before user
+ * installation existed.
+ */
+function readInstalledInServer(raw: {
+  guildId?: string | null;
+  authorizingIntegrationOwners?: Record<string, unknown> | null;
+}): boolean {
+  if (!raw.guildId) return true;
+  const owners = raw.authorizingIntegrationOwners;
+  if (!owners || typeof owners !== 'object') return true;
+  return String(ApplicationIntegrationType.GuildInstall) in owners;
+}
+
+/**
  * The permissions a person holds in this server, by name.
  *
  * The library hands these over as a PermissionsBitField on anything recent
@@ -324,6 +357,7 @@ export function toInteraction(raw: unknown): Interaction {
     guildId?: string | null;
     channelId?: string | null;
     context?: number | null;
+    authorizingIntegrationOwners?: Record<string, unknown> | null;
     memberPermissions?: unknown;
     appPermissions?: unknown;
   };
@@ -345,6 +379,7 @@ export function toInteraction(raw: unknown): Interaction {
     guildId: source.guildId ?? null,
     channelId: source.channelId ?? null,
     context: readContext(source),
+    installedInServer: readInstalledInServer(source),
     memberPermissions: source.guildId ? readPermissions(source.memberPermissions) : [],
     applicationPermissions: source.guildId ? readPermissions(source.appPermissions) : [],
   };

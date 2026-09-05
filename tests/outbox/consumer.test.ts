@@ -26,6 +26,12 @@ function memoryCursors(start = 0): OutboxCursors & { at: () => number } {
   return {
     at: () => held.get(ANNOUNCEMENTS_CONSUMER) ?? 0,
     async read(consumer) { return held.get(consumer) ?? 0; },
+    async state(consumer) {
+      const lastOutboxId = held.get(consumer);
+      return lastOutboxId === undefined
+        ? null
+        : { lastOutboxId, updatedAt: '2026-09-05 09:30:00' };
+    },
     async advance(consumer, lastOutboxId) { held.set(consumer, lastOutboxId); },
   };
 }

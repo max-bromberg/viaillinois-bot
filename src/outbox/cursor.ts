@@ -23,9 +23,23 @@ export const ANNOUNCEMENTS_CONSUMER = 'announcements';
 /** Where a consumer that has never read the outbox starts. */
 export const START_OF_OUTBOX = 0;
 
+/** Where a consumer has reached, and when it last moved. */
+export interface CursorState {
+  lastOutboxId: number;
+  /** When the cursor last moved, in campus wall clock. */
+  updatedAt: string;
+}
+
 export interface OutboxCursors {
   /** The last entry this consumer finished, or the start of the outbox. */
   read(consumer: string): Promise<number>;
+  /**
+   * Where this consumer has reached and when it last moved, or null when it
+   * has never read the outbox. The housekeeping job reads this, because the
+   * web platform prunes the outbox after thirty days and a cursor that has not
+   * moved in longer than that points at entries that no longer exist.
+   */
+  state(consumer: string): Promise<CursorState | null>;
   /** Record that this consumer has finished everything up to and including an entry. */
   advance(consumer: string, lastOutboxId: number): Promise<void>;
 }
@@ -43,6 +57,12 @@ export function createOutboxCursors(db: BotDatabase, options: OutboxCursorOption
       const [row] = await db.select().from(outboxCursor)
         .where(eq(outboxCursor.consumer, consumer));
       return row ? row.lastOutboxId : START_OF_OUTBOX;
+    },
+
+    async state(consumer: string): Promise<CursorState | null> {
+      const [row] = await db.select().from(outboxCursor)
+        .where(eq(outboxCursor.consumer, consumer));
+      return row ? { lastOutboxId: row.lastOutboxId, updatedAt: row.updatedAt } : null;
     },
 
     /**

@@ -7,6 +7,7 @@ import type { ViaClient } from '../via/client.ts';
 import type { GuildStore } from '../guilds/store.ts';
 import type { RateWindows } from '../ratelimit/windows.ts';
 import type { FeedStore } from '../feed/store.ts';
+import type { InterestMarks } from '../feed/interestMarks.ts';
 
 /**
  * What a command is given and what it answers with.
@@ -22,6 +23,13 @@ export interface CommandContext {
   guilds: GuildStore;
   /** What each person chose: what they follow, when the bot writes to them, and their reminders. */
   feed: FeedStore;
+  /**
+   * Who marked interest in which event, by Discord account. The web platform
+   * holds interest by NetID, which cannot be turned back into somebody to
+   * write to, so the bot keeps the mark it forwarded and the feedback request
+   * the morning after reads it. Left out where a run has none.
+   */
+  interestMarks?: InterestMarks;
   /** The public address of the website, which the link buttons open. */
   websiteUrl: string;
   rateWindows: RateWindows;

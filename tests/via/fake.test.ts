@@ -351,6 +351,40 @@ describe('interest through the fake', () => {
   });
 });
 
+describe('feedback through the fake', () => {
+  const ADA = '204255221017214977';
+
+  it('records one answer per person and event, replacing what they said before', async () => {
+    const via = createFakeViaClient();
+    via.seedEvent({ eventId: 10 });
+    via.seedLink(ADA);
+
+    await via.recordFeedback(10, { rating: 3 }, ADA);
+    await via.recordFeedback(10, { rating: 5, comment: 'Better than I expected.' }, ADA);
+
+    expect(via.feedback).toEqual([
+      { eventId: 10, rating: 5, comment: 'Better than I expected.', actingDiscordUserId: ADA },
+    ]);
+  });
+
+  it('refuses feedback from an account VIA does not know, as the acting header does', async () => {
+    const via = createFakeViaClient();
+    via.seedEvent({ eventId: 10 });
+    const failure = await via.recordFeedback(10, { rating: 3 }, ADA)
+      .then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('not_linked');
+  });
+
+  it('refuses feedback on an event nothing seeded', async () => {
+    const via = createFakeViaClient();
+    via.clearEvents();
+    via.seedLink(ADA);
+    const failure = await via.recordFeedback(10, { rating: 3 }, ADA)
+      .then(() => null, (err: unknown) => err);
+    expect((failure as ViaError).code).toBe('not_found');
+  });
+});
+
 /**
  * The personal calendar, as the fake serves it. The rules modelled here are
  * the web platform's: the calendar belongs to a linked person, asking for it

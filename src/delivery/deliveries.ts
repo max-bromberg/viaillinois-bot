@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, lt } from 'drizzle-orm';
 import { deliveries } from '../db/schema.ts';
 import { campusStamp } from '../render/campusTime.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
@@ -96,6 +96,12 @@ export interface Deliveries {
   pending(): Promise<Delivery[]>;
   /** One delivery by its key, or null when nothing intended it. */
   find(key: DeliveryKey): Promise<Delivery | null>;
+  /**
+   * Remove every delivery intended before a campus wall clock moment, and say
+   * how many went. Section 10 of the design keeps these rows for ninety days,
+   * which is the housekeeping job's question rather than this module's.
+   */
+  pruneBefore(intendedBefore: string): Promise<number>;
 }
 
 /** MySQL's code for a row that a unique key refused. */
@@ -173,6 +179,11 @@ export function createDeliveries(db: BotDatabase, options: DeliveriesOptions = {
       await db.update(deliveries)
         .set({ messageId, deliveredAt: campusStamp(now()) })
         .where(eq(deliveries.deliveryId, deliveryId));
+    },
+
+    async pruneBefore(intendedBefore: string): Promise<number> {
+      const result = await db.delete(deliveries).where(lt(deliveries.intendedAt, intendedBefore));
+      return (result as unknown as [{ affectedRows: number }])[0].affectedRows;
     },
 
     async pending(): Promise<Delivery[]> {

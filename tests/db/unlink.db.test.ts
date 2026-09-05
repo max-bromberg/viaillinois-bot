@@ -8,10 +8,10 @@ let applyMigrations: typeof import('../../src/db/migrate.ts').applyMigrations;
 let deleteLocalData: typeof import('../../src/commands/unlink.ts').deleteLocalData;
 
 /**
- * Unlinking deletes every subscription, preference, reminder and course the
- * bot held for the account. That is a claim about four tables, so it is
- * tested against the real ones, including the claim that it leaves everybody
- * else alone.
+ * Unlinking deletes every subscription, preference, reminder, course and
+ * interest mark the bot held for the account. That is a claim about five
+ * tables, so it is tested against the real ones, including the claim that it
+ * leaves everybody else alone.
  */
 describe('deleting what the bot holds for a Discord account', () => {
   const rosa = '204255221017214977';
@@ -38,15 +38,17 @@ describe('deleting what the bot holds for a Discord account', () => {
     await db.insert(schema.userPreferences).values({ discordUserId, digestDay: 0, digestHour: 9 });
     await db.insert(schema.reminders).values({ discordUserId, eventId: 41, remindAt: '2026-09-10 17:00:00' });
     await db.insert(schema.userCourses).values({ discordUserId, courseCode: 'ECE 391' });
+    await db.insert(schema.interestMarks).values({ discordUserId, eventId: 41 });
   }
 
-  it('deletes the rows in all four tables', async () => {
+  it('deletes the rows in all five tables', async () => {
     await seed(rosa);
     await deleteLocalData(db, rosa);
     expect(await db.select().from(schema.subscriptions)).toEqual([]);
     expect(await db.select().from(schema.userPreferences)).toEqual([]);
     expect(await db.select().from(schema.reminders)).toEqual([]);
     expect(await db.select().from(schema.userCourses)).toEqual([]);
+    expect(await db.select().from(schema.interestMarks)).toEqual([]);
   });
 
   it('leaves every other person untouched', async () => {
@@ -57,6 +59,7 @@ describe('deleting what the bot holds for a Discord account', () => {
     expect((await db.select().from(schema.userPreferences))[0]!.discordUserId).toBe(other);
     expect(await db.select().from(schema.reminders)).toHaveLength(1);
     expect(await db.select().from(schema.userCourses)).toHaveLength(1);
+    expect(await db.select().from(schema.interestMarks)).toHaveLength(1);
   });
 
   it('does nothing and says nothing when there was nothing to delete', async () => {

@@ -52,6 +52,24 @@ describe('the outbox cursor', () => {
     expect(await cursors().read('roles')).toBe(3);
   });
 
+  /**
+   * The housekeeping job asks when the cursor last moved, because the web
+   * platform prunes the outbox after thirty days and a cursor older than that
+   * points at entries that are gone. What it does about it is its own, and
+   * this is only the reading.
+   */
+  it('says when the cursor last moved, and nothing at all before it ever has', async () => {
+    expect(await cursors().state(ANNOUNCEMENTS_CONSUMER)).toBe(null);
+
+    const at = new Date('2026-09-05T14:30:00Z');
+    await createOutboxCursors(db, { now: () => at }).advance(ANNOUNCEMENTS_CONSUMER, 7);
+
+    expect(await cursors().state(ANNOUNCEMENTS_CONSUMER)).toEqual({
+      lastOutboxId: 7,
+      updatedAt: '2026-09-05 09:30:00',
+    });
+  });
+
   it('names the consumer the first release runs, so the row is found again after a restart', () => {
     expect(ANNOUNCEMENTS_CONSUMER).toBe('announcements');
   });

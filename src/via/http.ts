@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, calendarRsosBody, eventChangesBody, eventQueryParams, interestBody,
-  midtermQueryParams, parseActingEvent, parseBuilding, parseCourses, parseEvent, parseEventPage,
-  parseFreeRooms, parseInterestAnswer, parseLinkSession, parseLinkedAccount, parseLocations,
-  parseMidterms, parseOutboxPage, parsePersonalCalendar, parseRsoMembers, parseRsoWithEvents,
+  ViaError, ViaBusyError, calendarRsosBody, eventChangesBody, eventQueryParams, feedbackBody,
+  interestBody, midtermQueryParams, parseActingEvent, parseBuilding, parseCourses, parseEvent,
+  parseEventPage, parseFreeRooms, parseInterestAnswer, parseLinkSession, parseLinkedAccount,
+  parseLocations, parseMidterms, parseOutboxPage, parsePersonalCalendar, parseRsoMembers, parseRsoWithEvents,
   parseRsos, parseScheduleRecommendations, parseSeriesCreated, postponementBody,
   scheduleRequestBody, seriesRequestBody,
   type ViaClient, type ViaErrorCode, type Building, type CampusLocation, type Course,
-  type EventChanges, type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery,
-  type InterestAnswer, type InterestSignal, type LinkSession, type LinkedAccount, type Midterm,
-  type MidtermQuery, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement,
+  type EventChanges, type EventFeedback, type EventPage, type EventQuery, type FreeRooms,
+  type FreeRoomQuery, type InterestAnswer, type InterestSignal, type LinkSession,
+  type LinkedAccount, type Midterm, type MidtermQuery, type OutboxPage, type OutboxQuery,
+  type PersonalCalendar, type Postponement,
   type Rso, type RsoMember, type RsoWithEvents, type ScheduleRecommendations, type ScheduleRequest,
   type SeriesCreated, type SeriesRequest, type ViaEvent,
 } from './client.ts';
@@ -469,6 +470,24 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
         body: eventChangesBody(changes),
         actingDiscordUserId,
       }));
+    },
+
+    /**
+     * The score and the comment go to the web platform as the acting person,
+     * which is how it records them against a NetID and how it refuses somebody
+     * whose account it no longer knows.
+     */
+    async recordFeedback(
+      eventId: number,
+      feedback: EventFeedback,
+      actingDiscordUserId: string,
+    ): Promise<void> {
+      await request<unknown>({
+        method: 'POST',
+        path: `/events/${encodeURIComponent(String(eventId))}/feedback`,
+        body: feedbackBody(feedback),
+        actingDiscordUserId,
+      });
     },
 
     async recommendSchedule(

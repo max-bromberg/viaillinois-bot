@@ -20,6 +20,7 @@ import { createRateWindows } from './ratelimit/windows.ts';
 import { createDispatcher, deleteLocalData } from './commands/index.ts';
 import { createDeliveries } from './delivery/deliveries.ts';
 import { createFeedStore } from './feed/store.ts';
+import { createInterestMarks } from './feed/interestMarks.ts';
 import { createEventMirrors } from './mirror/eventMirrors.ts';
 import { createScheduledEventMirror } from './mirror/scheduledEvents.ts';
 import { createInterestRecorder } from './mirror/interest.ts';
@@ -37,6 +38,8 @@ import { createPersonalReminderJob } from './jobs/personalReminders.ts';
 import { createGuildDigestJob } from './jobs/guildDigest.ts';
 import { createDayOfReminderJob } from './jobs/dayOfReminders.ts';
 import { createExamReminderJob } from './jobs/examReminders.ts';
+import { createFeedbackJob, FEEDBACK_HOUR } from './jobs/feedback.ts';
+import { createHousekeepingJob, HOUSEKEEPING_HOUR } from './jobs/housekeeping.ts';
 import { createGuildExamsJob } from './jobs/guildExams.ts';
 import { createPollClosingJob } from './jobs/schedulerPolls.ts';
 import { createRoleReconciliationJob } from './jobs/roleReconcile.ts';
@@ -89,6 +92,12 @@ const via = withHotReadCache(withNetIdDirectory(createViaHttpClient({
 
 const guilds = createGuildStore(db);
 const feed = createFeedStore(db);
+/**
+ * Who marked interest in which event, by Discord account, which is the one
+ * thing the feedback request the morning after cannot ask the web platform
+ * for: it holds interest by NetID, and the bot holds no NetID.
+ */
+const interestMarks = createInterestMarks(db);
 const guildLifecycle = createGuildLifecycle({ guilds });
 const deliveries = createDeliveries(db);
 const mirrors = createEventMirrors(db);
@@ -137,7 +146,7 @@ const scheduledEvents = createScheduledEventMirror({
   now: () => new Date(),
 });
 
-const recordInterest = createInterestRecorder({ via, mirrors });
+const recordInterest = createInterestRecorder({ via, mirrors, marks: interestMarks });
 
 /**
  * The membership roles a server maps, kept in step by the outbox as
@@ -208,8 +217,22 @@ const examReminders = createExamReminderJob({
 const dayOfReminders = createDayOfReminderJob({
   guilds, deliveries, actions, via, disable, websiteUrl: config.viaPublicUrl,
 });
+const feedbackRequests = createFeedbackJob({
+  feed, marks: interestMarks, guilds, deliveries, via, deliver: deliverDirectMessage,
+});
 
 const closingPolls = createPollClosingJob({ polls, actions });
+
+/**
+ * The daily housekeeping: the ninety day retention of section 10, and the
+ * rebuild that a cursor older than the outbox retention asks for. The health
+ * endpoint reports both, because neither is anything a person would notice
+ * until it had been going wrong for a long time.
+ */
+const housekeeping = createHousekeepingJob({
+  deliveries, rateWindows, cursors, guilds, mirror: scheduledEvents,
+});
+
 const roleReconciliation = createRoleReconciliationJob({
   guilds, roles: membershipRoles, grants, directory: netIds, via,
 });
@@ -228,6 +251,31 @@ const scheduler = createJobScheduler({
     // clock does, and Discord sends no event to say so, so the bot looks on
     // every pass for the polls whose time is up.
     { name: 'scheduler.polls', cadence: 'tick', async run(hour) { await closingPolls.run(hour); } },
+    // The housekeeping runs once a day, in the quietest hour of the campus
+    // day, and the hourly cadence catches it up like everything else.
+    {
+      name: 'housekeeping',
+      async run(hour) {
+        if (hour.hour !== HOUSEKEEPING_HOUR) return;
+        await housekeeping.run(hour);
+      },
+    },
+    // The feedback requests go out once a day, the morning after the events
+    // they are about, and the hourly cadence is what makes a bot that was down
+    // over that hour still send them when it returns.
+    {
+      name: 'feedback.request',
+      async run(hour) {
+        if (hour.hour !== FEEDBACK_HOUR) return;
+        const report = await feedbackRequests.run(hour);
+        if (report.events > 0) {
+          console.log(
+            `via-bot: asked for feedback on ${report.events} events, `
+            + `${report.sent} messages sent, ${report.skipped} people passed over`,
+          );
+        }
+      },
+    },
     // The roles are reconciled once a day, at the hour the design names, and
     // the hourly cadence is what makes a bot that was down over it catch up.
     {
@@ -248,6 +296,7 @@ const dispatch = createDispatcher({
   via,
   guilds,
   feed,
+  interestMarks,
   websiteUrl: config.viaPublicUrl,
   rateWindows,
   polls,
@@ -275,6 +324,7 @@ const health = await startHealthServer({
   viaPlatform: () => via.health(),
   outboxConsumer: () => consumer.state(),
   scheduler: () => scheduler.state(),
+  housekeeping: () => housekeeping.state(),
 }, config.healthPort);
 
 console.log(`via-bot ${version}: health listening on port ${health.port}`);

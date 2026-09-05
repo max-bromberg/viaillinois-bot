@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { featureById } from '../features/registry.ts';
-import { reminders, subscriptions, userCourses, userPreferences } from '../db/schema.ts';
+import { interestMarks, reminders, subscriptions, userCourses, userPreferences } from '../db/schema.ts';
 import { ViaBusyError, ViaError } from '../via/client.ts';
 import { describeWait, type CommandContext, type CommandHandler } from './types.ts';
 import type { BotDatabase } from '../ratelimit/windows.ts';
@@ -32,14 +32,17 @@ export const NOTHING_TO_UNLINK_MESSAGE =
   'This Discord account is not linked to a VIA account, so there is nothing to unlink.';
 
 /**
- * Delete every row the bot holds for a Discord account. The four tables here
+ * Delete every row the bot holds for a Discord account. The five tables here
  * are all of them: nothing else in the bot database is keyed by a person.
+ * Interest_Marks is one of them, because a mark is a thing the bot holds
+ * about a person and it exists only to reach them after an event.
  */
 export async function deleteLocalData(db: BotDatabase, discordUserId: string): Promise<void> {
   await db.delete(subscriptions).where(eq(subscriptions.discordUserId, discordUserId));
   await db.delete(userPreferences).where(eq(userPreferences.discordUserId, discordUserId));
   await db.delete(reminders).where(eq(reminders.discordUserId, discordUserId));
   await db.delete(userCourses).where(eq(userCourses.discordUserId, discordUserId));
+  await db.delete(interestMarks).where(eq(interestMarks.discordUserId, discordUserId));
 }
 
 export const unlinkCommand: CommandHandler = {

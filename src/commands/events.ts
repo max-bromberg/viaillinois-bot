@@ -343,6 +343,21 @@ export const eventComponent: ComponentHandler = {
         return answerFor(err);
       }
 
+      // The mark is written down as well, by Discord account, because the
+      // feedback request the morning after has to reach this person and the
+      // web platform holds their interest by NetID. It is written only once
+      // the web platform has taken the signal, so the two cannot disagree, and
+      // a mark that cannot be written costs a feedback request rather than the
+      // answer to what the person actually pressed.
+      try {
+        await context.interestMarks?.mark(eventId, interaction.userId);
+      } catch (err) {
+        console.error(
+          `writing down the interest of ${interaction.userId} in event ${eventId} failed:`,
+          (err as Error).message,
+        );
+      }
+
       return { content: interestedMessage(event.title, answer.interestCount) };
     }
 

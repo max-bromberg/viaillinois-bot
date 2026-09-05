@@ -25,14 +25,45 @@ individual feature and the channel it posts to.
 
 ## Status
 
-This repository is in the planning stage. Nothing runs yet. The design is written out under
-`docs/superpowers/specs`, the decisions behind it are in `docs/decisions.md`, and the
-implementation plans are under `docs/superpowers/plans`.
+The bot is built and untagged. Every feature of the first release is written, with its
+tests, and none of it has been through a release: there is no `v0.1.0` yet, and the web
+platform's `deploy/bot-release` does not name a tag of this repository.
+
+What runs now, against the fake web platform client and the plain interaction objects the
+tests are written on:
+
+| Part | What it does |
+| --- | --- |
+| Identity | `/link` and `/unlink`, the account link flow the web platform serves, and the three linked role facts registered with Discord |
+| Reading | `/events`, `/event`, `/rso`, `/midterms`, `/rooms`, `/course` and `/building`, answered from the web platform's reading endpoints |
+| Setup | `/via setup` and `/via config`, one ephemeral panel per page, and `/via remove` |
+| Announcements | The outbox consumer, the announcements and change notices, the native scheduled events, and the living this week message |
+| The personal feed | Following organizations, the weekly digest, reminders, the personal calendar, and the courses somebody added for exam reminders |
+| The board's work | The six administrative actions, the scheduler with its poll, and the membership roles |
+| Feedback | The morning after job, the five buttons, the comment form and the two switches |
+| Housekeeping | The ninety day retention, and the rebuild a cursor older than the outbox retention asks for |
+
+What remains before the first release is the part no test can stand in for. Nothing here
+has been exercised against real Discord: the tests use plain interaction objects and a fake
+web platform client, deliberately, so the parts that only exist inside a real server have
+been designed and never watched. That means the command registration with both installation
+contexts, the scheduled events in a server's Events tab, Discord's own polls, the role
+assignments, the direct messages and the forms. Decision 11 in the design says how that is
+done, which is a development application and one shared test server from a developer's
+machine, and `docs/development.md` says how to set it up.
+
+The release itself is then the procedure in `docs/deployment.md`: a bump here, a green gate
+on the tag, that tag written into `deploy/bot-release` on the web platform, and one cutover
+that brings up all three containers.
+
+### The documents
 
 | Document | What it covers |
 |---|---|
 | `docs/superpowers/specs/2026-09-04-via-discord-bot.md` | The bot itself: audiences, identity, per-server configuration, the first release's features, architecture, privacy, deployment and testing |
 | `docs/superpowers/specs/2026-09-04-via-internal-service-api.md` | The work on the web platform side: the internal service API, account linking, the outbox, and the new tables |
+| `docs/development.md` | Running the bot locally, against a development Discord application and a local web platform |
+| `docs/deployment.md` | Cutting a release here, and what the web platform's cutover does with the tag |
 | `docs/roadmap.md` | The second and third horizons, where VIA grows from an event platform into the platform that runs an RSO |
 | `docs/decisions.md` | The decision log |
 | `docs/superpowers/plans/` | The implementation plans, one per spec, in ordered increments |

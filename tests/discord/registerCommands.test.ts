@@ -102,6 +102,47 @@ describe('building the application commands from the registry', () => {
     ]);
   });
 
+  /**
+   * Section 6.8 of the design, over the whole registry rather than over one
+   * example: every command a student types is published to both installation
+   * contexts and to all three places, and every command that acts on a server
+   * is published to the server installation only. This is the assertion that
+   * catches a feature added later without the contexts it needs.
+   */
+  it('opens every student command in the registry to both installation contexts and all three places', () => {
+    const commands = buildCommands(features);
+    const studentNames = new Set<string>();
+    for (const feature of features) {
+      if (!feature.command) continue;
+      if (feature.tier !== 'read' && feature.tier !== 'linked') continue;
+      studentNames.add(feature.command.group ?? feature.command.name);
+      for (const alternate of feature.command.alternateNames ?? []) {
+        studentNames.add(feature.command.group ?? alternate.name);
+      }
+    }
+    expect(studentNames.size).toBeGreaterThan(0);
+
+    for (const name of studentNames) {
+      const command = commands.find(one => one.name === name)!;
+      expect(command, `the command ${name} is in the built list`).toBeDefined();
+      expect(command.integration_types, `the command ${name} is user installable`).toEqual([
+        ApplicationIntegrationType.GuildInstall,
+        ApplicationIntegrationType.UserInstall,
+      ]);
+      expect(command.contexts, `the command ${name} is usable everywhere`).toEqual([
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ]);
+    }
+  });
+
+  it('keeps the group that acts on a server to the server installation and to servers', () => {
+    const group = buildCommands(features).find(c => c.name === VIA_GROUP)!;
+    expect(group.integration_types).toEqual([ApplicationIntegrationType.GuildInstall]);
+    expect(group.contexts).toEqual([InteractionContextType.Guild]);
+  });
+
   it('takes the places a command can be used from the contexts the feature declares', () => {
     const commands = buildCommands([feature({
       id: 'events.thisweek',

@@ -93,6 +93,12 @@ export interface FeedStore {
   /** Ask for a reminder, answering whether this is new rather than a change of time. */
   addReminder(discordUserId: string, eventId: number, remindAt: string): Promise<boolean>;
   listReminders(discordUserId: string): Promise<ReminderRow[]>;
+  /**
+   * Every reminder still outstanding, which is what the feedback job reads to
+   * find the people who asked to be reminded of an event that has now
+   * happened. A reminder that has been sent is deleted, so this is short.
+   */
+  outstandingReminders(limit?: number): Promise<ReminderRow[]>;
   /** The reminders that have come due at a campus wall clock time, oldest first. */
   dueReminders(at: string, limit?: number): Promise<ReminderRow[]>;
   removeReminder(reminderId: number): Promise<void>;
@@ -275,6 +281,13 @@ export function createFeedStore(db: BotDatabase, options: FeedStoreOptions = {})
       const rows = await db.select().from(reminders)
         .where(eq(reminders.discordUserId, discordUserId))
         .orderBy(asc(reminders.remindAt));
+      return rows.map(presentReminder);
+    },
+
+    async outstandingReminders(limit: number = REMINDER_BATCH): Promise<ReminderRow[]> {
+      const rows = await db.select().from(reminders)
+        .orderBy(asc(reminders.reminderId))
+        .limit(limit);
       return rows.map(presentReminder);
     },
 

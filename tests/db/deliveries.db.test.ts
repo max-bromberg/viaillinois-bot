@@ -169,6 +169,23 @@ describe('Deliveries', () => {
         .toBe(null);
     });
 
+    /**
+     * Section 10 of the design keeps Deliveries for ninety days. The rows are
+     * the record of what the bot posted, and a row older than that answers no
+     * question anybody asks, because nothing is retried after ninety days.
+     */
+    it('prunes the deliveries intended before a campus wall clock moment, and no others', async () => {
+      await db.insert(deliveries).values([
+        { outboxId: 1, target: 'user:1', purpose: 'old', kind: 'direct_message', intendedAt: '2026-06-01 09:00:00' },
+        { outboxId: 2, target: 'user:1', purpose: 'new', kind: 'direct_message', intendedAt: '2026-09-01 09:00:00' },
+      ]);
+
+      expect(await store().pruneBefore('2026-06-07 00:00:00')).toBe(1);
+      const rows = await db.select().from(deliveries);
+      expect(rows.map(row => row.purpose)).toEqual(['new']);
+      expect(await store().pruneBefore('2026-06-07 00:00:00')).toBe(0);
+    });
+
     it('names a channel and a person the way the target column spells them', () => {
       expect(channelTarget('700000000000000001')).toBe('channel:700000000000000001');
     });

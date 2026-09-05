@@ -35,6 +35,20 @@ export interface HealthProbes {
    * the consumer is and on the same terms: it is not a readiness check.
    */
   scheduler?: () => SchedulerReport;
+  /**
+   * When the housekeeping last pruned the rows section 10 of the design keeps
+   * for ninety days, and whether it knows the bot has fallen behind the outbox
+   * and has not yet rebuilt what it mirrors. Reported for the same reason the
+   * scheduler is, and on the same terms: it is not a readiness check, because
+   * a bot that started this morning has pruned nothing yet.
+   */
+  housekeeping?: () => HousekeepingReport;
+}
+
+/** What the housekeeping says about itself, or nothing before its first run. */
+export interface HousekeepingReport {
+  lastPruneAt: string | null;
+  reconciliationPending: boolean;
 }
 
 /** What the scheduler says about itself, or nothing before its first pass. */
@@ -61,6 +75,10 @@ export interface HealthReport {
   lastPollAt: string | null;
   /** When the scheduler last made a pass, in campus wall clock. */
   schedulerLastTickAt: string | null;
+  /** When the rows kept for ninety days were last pruned, in campus wall clock. */
+  lastPruneAt: string | null;
+  /** Whether the bot has fallen behind the outbox and not yet caught up another way. */
+  reconciliationPending: boolean;
 }
 
 export interface HealthServer {
@@ -115,6 +133,15 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
     console.error('health check scheduler failed:', (err as Error).message);
   }
 
+  let housekeeping: HousekeepingReport = { lastPruneAt: null, reconciliationPending: false };
+  try {
+    housekeeping = probes.housekeeping?.() ?? housekeeping;
+  } catch (err) {
+    // Housekeeping that cannot say what it has done says nothing, rather than
+    // failing a check that is about the three connections.
+    console.error('health check housekeeping failed:', (err as Error).message);
+  }
+
   const ok = migrationVersion !== null && gateway && database && viaPlatform;
   return {
     code: ok ? 200 : 503,
@@ -128,6 +155,8 @@ export async function healthReport(probes: HealthProbes): Promise<{ code: number
       outboxCursor: consumer.cursor,
       lastPollAt: consumer.lastPollAt,
       schedulerLastTickAt: scheduler.lastTickAt,
+      lastPruneAt: housekeeping.lastPruneAt,
+      reconciliationPending: housekeeping.reconciliationPending,
     },
   };
 }

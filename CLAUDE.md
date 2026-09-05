@@ -78,12 +78,17 @@ labels, direct messages, error messages, and documentation.
 
 ## Commands
 
-The runtime is not set up yet. When it is, these are the commands this file will list, and
-they mirror the web platform's so that a contributor moving between the two repositories
-finds the same names:
-
 - `npm install` install dependencies
-- `npm run dev` run the bot against a development Discord application
-- `npx vitest run` the test suite
+- `npm run dev` run the bot against a development Discord application, reading `.env`
+- `npm test` the unit project, which needs neither Discord nor a database
+- `npm run test:db` the database project, against the throwaway container
+- `npx vitest run` both projects
+- `npm run typecheck` the types, which the gate runs as its own step
 - `npm run check:language` em dash and en dash check, which the gate enforces
+- `npx drizzle-kit generate --name <short_name>` write the migration for a schema change
+- `npx drizzle-kit check` the drift check, which the gate runs
+- `node --experimental-strip-types src/db/migrate.ts` apply the migrations to `via_bot`
 - `scripts/bump-version.sh <patch|minor|major>` cut a release, see `docs/deployment.md`
+
+Running the bot locally is written out in `docs/development.md`, including the development
+Discord application it needs and the settings that go with it.

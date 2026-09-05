@@ -9,7 +9,7 @@ import {
 } from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the identity, reading, setup, feed, campus, proactive and board features the first five increments have', () => {
+  it('registers the identity, reading, setup, feed, campus, proactive, board and feedback features of the six increments', () => {
     expect(features.map(f => f.id).sort()).toEqual([
       'admin.cancel',
       'admin.describe',
@@ -32,6 +32,7 @@ describe('the feature registry', () => {
       'feed.digest',
       'feed.follow',
       'feed.reminders',
+      'feedback.request',
       'identity.link',
       'identity.unlink',
       'living.thisweek',
@@ -80,10 +81,11 @@ describe('the feature registry', () => {
   });
 
   it('names a channel purpose on every proactive feature that posts in a channel', () => {
-    // The scheduled event mirror is the one proactive feature that posts
-    // nowhere in the server's channels: it writes into the server's own
-    // Events tab, which is not a channel a manager can bind.
-    for (const feature of features.filter(f => f.category === 'proactive' && f.id !== 'mirror.scheduled')) {
+    // Two proactive features post nowhere in the server's channels. The
+    // scheduled event mirror writes into the server's own Events tab, which is
+    // not a channel a manager can bind, and the feedback request is a direct
+    // message to one person rather than anything a channel reads.
+    for (const feature of features.filter(f => f.category === 'proactive' && f.channelPurposes.length > 0)) {
       expect(feature.channelPurposes.length).toBeGreaterThan(0);
       for (const purpose of feature.channelPurposes) {
         expect(CHANNEL_PURPOSES).toContain(purpose);
@@ -110,18 +112,58 @@ describe('the feature registry', () => {
     expect([...feature.contexts]).toEqual(['guild']);
   });
 
-  it('leaves every proactive feature off until a server switches it on', () => {
+  it('leaves every proactive feature that posts in a server off until a server switches it on', () => {
     // Section 2 of the design: nothing proactive happens in a server until
-    // that server has set it up and asked for it.
-    for (const feature of features.filter(f => f.category === 'proactive')) {
+    // that server has set it up and asked for it. The feedback request posts
+    // nothing in a server, so it is the one proactive feature that is on from
+    // the start: it is a direct message to a person who marked interest in an
+    // event, and what a server switches here is whether its own organization
+    // collects feedback at all.
+    for (const feature of features.filter(f => f.category === 'proactive' && f.id !== 'feedback.request')) {
       expect(feature.defaultEnabled).toBe(false);
       expect(feature.tier).toBe('manager');
     }
+    expect(featureById('feedback.request').defaultEnabled).toBe(true);
+    expect(featureById('feedback.request').tier).toBe('manager');
+  });
+
+  it('asks for feedback the morning after an event, with no channel and no permission of its own', () => {
+    const feature = featureById('feedback.request');
+    expect(feature.category).toBe('proactive');
+    expect(feature.channelPurposes).toEqual([]);
+    expect(feature.requiredPermissions).toEqual([]);
+    expect([...feature.contexts]).toEqual(['guild']);
+    expect(feature.command).toBeUndefined();
   });
 
   it('names no channel purpose on a feature that does not post', () => {
     for (const feature of features.filter(f => f.category === 'command')) {
       expect(feature.channelPurposes).toEqual([]);
+    }
+  });
+
+  /**
+   * Section 6.8 of the design: every feature a student uses is usable under
+   * user installation, so a person who installed the bot to their own account
+   * can use it in a server that has not installed it, in the bot's own direct
+   * messages, and in a group direct message. A feature that acts on a server
+   * is a server feature and says so.
+   */
+  it('makes every feature a student reaches usable in all three places', () => {
+    // The linked roles facts are the one exception: nothing is typed for them
+    // and nothing is answered, because the facts are registered once for the
+    // whole application and a server is what requires one for a role.
+    const forStudents = features.filter(feature =>
+      (feature.tier === 'read' || feature.tier === 'linked') && feature.id !== 'roles.linked');
+    expect(forStudents.length).toBeGreaterThan(0);
+    for (const feature of forStudents) {
+      expect([...feature.contexts].sort()).toEqual(['botDm', 'guild', 'privateChannel']);
+    }
+  });
+
+  it('keeps every feature that acts on a server to a server', () => {
+    for (const feature of features.filter(f => f.tier === 'editor' || f.tier === 'manager')) {
+      expect([...feature.contexts]).toEqual(['guild']);
     }
   });
 

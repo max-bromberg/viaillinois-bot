@@ -4,6 +4,7 @@ import { eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponen
 import { PAGE_SIZE } from '../../src/render/eventList.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
 import { interaction, testContext } from './support.ts';
+import { memoryInterestMarks } from '../support/feed.ts';
 import { ViaError } from '../../src/via/client.ts';
 
 /**
@@ -290,6 +291,45 @@ describe('the buttons on the event card', () => {
     ]);
     expect(reply.content).toContain('General meeting');
     expect(reply.content).toContain('4');
+  });
+
+  /**
+   * The bot writes the mark down as well, by Discord account, because the
+   * feedback request the morning after has to reach the people who marked
+   * interest and the web platform holds them by NetID.
+   */
+  it('writes down who marked interest, so that the morning after can reach them', async () => {
+    const { context, via, marks } = testContext();
+    via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10, title: 'General meeting' });
+
+    await eventComponent.run(press('event:interested:10'), context);
+    expect(await marks.listPeople(10)).toEqual([ROSA]);
+  });
+
+  it('writes nothing down when VIA did not take the signal', async () => {
+    const { context, via, marks } = testContext();
+    via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10 });
+    via.failNextWith(new ViaError('The database is down.', 500, 'invalid'));
+
+    await eventComponent.run(press('event:interested:10'), context);
+    expect(await marks.listPeople(10)).toEqual([]);
+  });
+
+  it('still tells the person their interest was recorded when the mark cannot be written', async () => {
+    // The interest itself is on VIA by then, which is what the person asked
+    // for. A mark the bot could not write costs them a feedback request and
+    // nothing else, so it is logged rather than raised.
+    const marks = memoryInterestMarks();
+    const { context, via } = testContext({
+      marks: { ...marks, mark: async () => { throw new Error('the database is not answering'); } },
+    });
+    via.seedLink(ROSA);
+    via.seedEvent({ eventId: 10, title: 'General meeting', interestCount: 3 });
+
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+    expect(reply.content).toContain('General meeting');
   });
 
   it('counts one person once, however many times they press it', async () => {

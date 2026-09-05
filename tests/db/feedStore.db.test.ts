@@ -168,6 +168,19 @@ describe('the personal feed', () => {
       expect(await store().dueReminders('2026-09-05 09:30:00')).toEqual([]);
     });
 
+    /**
+     * The feedback request the morning after asks who wanted to be reminded of
+     * an event that has now happened, which is every reminder still standing
+     * rather than the ones that have come due.
+     */
+    it('answers with every reminder still outstanding, whenever it is due', async () => {
+      await store().addReminder(ADA, 10, '2026-09-05 08:00:00');
+      await store().addReminder(GRACE, 12, '2026-09-30 09:00:00');
+
+      const held = await store().outstandingReminders();
+      expect(held.map(row => row.eventId)).toEqual([10, 12]);
+    });
+
     it('says whether there was a reminder to take back', async () => {
       await store().addReminder(ADA, 10, '2026-09-05 08:00:00');
       expect(await store().removeReminderFor(ADA, 10)).toBe(true);

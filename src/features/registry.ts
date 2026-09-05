@@ -571,6 +571,22 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
   },
   {
+    id: 'feedback.request',
+    description: 'Ask the people who marked interest in an event, or asked to be reminded of it, what they thought of it, in one direct message the morning after.',
+    summary: 'Ask the people who marked interest in an event what they thought of it.',
+    category: 'proactive',
+    // This posts nothing in the server, so there is no channel to bind and no
+    // permission to be given, and it is on from the start. What a server
+    // switches here is whether the organization it is bound to collects
+    // feedback at all, which is section 6.4 of the design. The person who
+    // receives the message has their own switch in the message itself.
+    defaultEnabled: true,
+    requiredPermissions: [],
+    channelPurposes: [],
+    tier: 'manager',
+    contexts: ['guild'],
+  },
+  {
     id: 'campus.rooms',
     description: 'Show the rooms of a building that have no class, no reservation and no VIA event in them for a window of time.',
     summary: 'Show the rooms of a building with nothing in them for a window of time.',

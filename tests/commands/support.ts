@@ -9,7 +9,8 @@ import type {
   GuildMessagePurpose, GuildStore, MappedRole, PostedMessageRef, RemovedRows,
 } from '../../src/guilds/store.ts';
 import type { FeedStore } from '../../src/feed/store.ts';
-import { memoryFeedStore } from '../support/feed.ts';
+import { memoryFeedStore, memoryInterestMarks } from '../support/feed.ts';
+import type { InterestMarks } from '../../src/feed/interestMarks.ts';
 
 /** A plain interaction in the shape the adapter hands to a command. */
 export function interaction(overrides: Partial<Interaction> = {}): Interaction {
@@ -26,6 +27,7 @@ export function interaction(overrides: Partial<Interaction> = {}): Interaction {
     guildId: '900000000000000001',
     channelId: '900000000000000002',
     context: 'guild',
+    installedInServer: true,
     memberPermissions: [],
     applicationPermissions: ['ViewChannel', 'SendMessages', 'EmbedLinks'],
     ...overrides,
@@ -236,6 +238,8 @@ export interface TestContext {
   consumed: Array<{ subject: string; tier: RateTier }>;
   guilds: GuildStore;
   feed: FeedStore;
+  /** Who marked interest, which is what the feedback request the morning after reads. */
+  marks: InterestMarks;
   /** The fake clock, which the fake sleep moves forward. */
   clockAt: () => Date;
 }
@@ -250,6 +254,7 @@ export function testContext(options: {
   decide?: (subject: string, tier: RateTier) => RateDecision;
   guilds?: GuildStore;
   feed?: FeedStore;
+  marks?: InterestMarks;
 } = {}): TestContext {
   const via = createFakeViaClient();
   const posted: Array<{ channelId: string; reply: Reply }> = [];
@@ -260,12 +265,14 @@ export function testContext(options: {
   const consumed: Array<{ subject: string; tier: RateTier }> = [];
   const guilds = options.guilds ?? memoryGuildStore();
   const feed = options.feed ?? memoryFeedStore();
+  const marks = options.marks ?? memoryInterestMarks();
   let clock = new Date('2026-09-05T14:30:00Z');
 
   const context: CommandContext = {
     via,
     guilds,
     feed,
+    interestMarks: marks,
     websiteUrl: 'https://viaillinois.com',
     rateWindows: {
       consume: async (subject: string, tier: RateTier) => {
@@ -275,6 +282,7 @@ export function testContext(options: {
           : { allowed: true, used: 0, limit: 30, retryAfterSeconds: 0 };
       },
       sweep: async () => 0,
+      pruneBefore: async () => 0,
     },
     deleteLocalData: vi.fn(async (discordUserId: string) => { deleted.push(discordUserId); }),
     sendDirectMessage: async (discordUserId: string, content: string) => {
@@ -294,7 +302,7 @@ export function testContext(options: {
   };
 
   return {
-    context, via, guilds, feed, posted, pollsPosted, directMessages, scheduled, deleted,
+    context, via, guilds, feed, marks, posted, pollsPosted, directMessages, scheduled, deleted,
     consumed, clockAt: () => clock,
   };
 }

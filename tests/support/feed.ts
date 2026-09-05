@@ -2,6 +2,7 @@ import {
   DEFAULT_DIGEST_DAY, DEFAULT_DIGEST_HOUR, DEFAULT_REMINDER_LEAD_MINUTES,
   type FeedPreferenceChanges, type FeedPreferences, type FeedStore, type Follows, type ReminderRow,
 } from '../../src/feed/store.ts';
+import type { InterestMarks } from '../../src/feed/interestMarks.ts';
 
 /**
  * The personal feed in memory.
@@ -105,6 +106,13 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
         .map(one => ({ ...one }));
     },
 
+    async outstandingReminders(): Promise<ReminderRow[]> {
+      return reminders
+        .slice()
+        .sort((left, right) => left.reminderId - right.reminderId)
+        .map(one => ({ ...one }));
+    },
+
     async dueReminders(at: string, limit = 200): Promise<ReminderRow[]> {
       return reminders
         .filter(one => one.remindAt <= at)
@@ -146,6 +154,56 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
         .filter(([, held]) => held.has(courseCode))
         .map(([discordUserId]) => discordUserId)
         .sort();
+    },
+  };
+}
+
+/**
+ * Interest_Marks in memory. What the table guarantees is tested against a real
+ * database in tests/db/interestMarks.db.test.ts, so what the feedback job
+ * needs here is behaviour: who marked interest in what, and rows that go once
+ * the feedback for an event has been asked for.
+ */
+export function memoryInterestMarks(): InterestMarks {
+  const rows = new Set<string>();
+  const key = (eventId: number, discordUserId: string) => `${eventId}|${discordUserId}`;
+  const parts = (held: string) => held.split('|') as [string, string];
+
+  return {
+    async mark(eventId: number, discordUserId: string): Promise<boolean> {
+      const held = key(eventId, discordUserId);
+      if (rows.has(held)) return false;
+      rows.add(held);
+      return true;
+    },
+
+    async unmark(eventId: number, discordUserId: string): Promise<boolean> {
+      return rows.delete(key(eventId, discordUserId));
+    },
+
+    async listPeople(eventId: number): Promise<string[]> {
+      return [...rows]
+        .map(parts)
+        .filter(([held]) => Number(held) === eventId)
+        .map(([, discordUserId]) => discordUserId)
+        .sort();
+    },
+
+    async listEvents(): Promise<number[]> {
+      return [...new Set([...rows].map(held => Number(parts(held)[0])))]
+        .sort((left, right) => left - right);
+    },
+
+    async clearEvent(eventId: number): Promise<number> {
+      const held = [...rows].filter(one => Number(parts(one)[0]) === eventId);
+      for (const one of held) rows.delete(one);
+      return held.length;
+    },
+
+    async removeForUser(discordUserId: string): Promise<number> {
+      const held = [...rows].filter(one => parts(one)[1] === discordUserId);
+      for (const one of held) rows.delete(one);
+      return held.length;
     },
   };
 }

@@ -268,6 +268,17 @@ export interface InterestAnswer {
 }
 
 /**
+ * What one person thought of an event they went to: a score from one to five,
+ * and a comment when they wrote one. The web platform holds one answer per
+ * person and event, and a second answer replaces the first, so the comment
+ * arrives as a second call carrying the same score.
+ */
+export interface EventFeedback {
+  rating: number;
+  comment?: string;
+}
+
+/**
  * The private calendar address a person subscribes to from their own calendar
  * application, and when its token was last rotated. The token lives in the
  * address, so asking for the calendar again is what rotating it means, and the
@@ -570,6 +581,12 @@ export interface ViaClient {
   cancelEvent(eventId: number, actingDiscordUserId: string): Promise<string | null>;
   /** Change the description, the visibility or the location note of one event. */
   patchEvent(eventId: number, changes: EventChanges, actingDiscordUserId: string): Promise<ViaEvent | null>;
+  /**
+   * Record what the acting person thought of an event they went to. The web
+   * platform holds one answer per person and event, so a second call with the
+   * same score and a comment replaces the first rather than adding to it.
+   */
+  recordFeedback(eventId: number, feedback: EventFeedback, actingDiscordUserId: string): Promise<void>;
   /** Ask the same scheduler the dashboard asks, for the organization the request names. */
   recommendSchedule(request: ScheduleRequest, actingDiscordUserId: string): Promise<ScheduleRecommendations>;
   /** Create a repeat, exactly as the dashboard's own form does. */
@@ -815,6 +832,18 @@ export function interestBody(interest: InterestSignal): Record<string, unknown> 
   if (!interest.actingDiscordUserId && interest.discordUserId) {
     body.discord_user_id = interest.discordUserId;
   }
+  return body;
+}
+
+/**
+ * What the feedback call sends. The person is named by the acting header, as
+ * every acting endpoint names them, so the body carries the score and the
+ * comment and nothing about who left them. A comment nobody wrote is left out
+ * rather than sent as an empty string.
+ */
+export function feedbackBody(feedback: EventFeedback): Record<string, unknown> {
+  const body: Record<string, unknown> = { rating: feedback.rating };
+  if (feedback.comment) body.comment = feedback.comment;
   return body;
 }
 

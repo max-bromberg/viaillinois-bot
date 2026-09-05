@@ -63,6 +63,16 @@ export function memoryDeliveries(): Deliveries & { rows: () => Delivery[] } {
     async find(key: DeliveryKey): Promise<Delivery | null> {
       return rows.get(keyOf(key)) ?? null;
     },
+
+    /**
+     * The prune asks about the intended_at column, which a Delivery does not
+     * carry, so what it removes is tested against the real table in
+     * tests/db/deliveries.db.test.ts. Here it removes nothing, because nothing
+     * in memory is old.
+     */
+    async pruneBefore(): Promise<number> {
+      return 0;
+    },
   };
 }
 

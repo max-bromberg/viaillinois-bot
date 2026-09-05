@@ -295,6 +295,31 @@ export const reminders = mysqlTable('Reminders', {
 ]);
 
 /**
+ * Who marked interest in an event, by Discord account.
+ *
+ * The web platform holds interest by NetID, and section 7 of the design says
+ * the bot stores Discord identifiers and VIA identifiers and nothing that
+ * identifies a person beyond those. So the bot cannot ask the web platform
+ * who was interested in an event and turn the answer into Discord accounts,
+ * and it keeps its own record of the marks it saw: one row per event and
+ * Discord account, written when interest is forwarded to the web platform and
+ * deleted when it is withdrawn.
+ *
+ * This is what the morning after job reads to decide who to ask for feedback,
+ * and it holds nothing the bot did not already hold. The rows for an event go
+ * once the feedback for it has been asked for, and the rows of a person go
+ * when they unlink.
+ */
+export const interestMarks = mysqlTable('Interest_Marks', {
+  eventId: int('event_id').notNull(),
+  discordUserId: snowflake('discord_user_id').notNull(),
+  markedAt: stamp('marked_at'),
+}, (table) => [
+  primaryKey({ columns: [table.eventId, table.discordUserId], name: 'Interest_Marks_event_id_discord_user_id' }),
+  index('idx_interest_marks_user').on(table.discordUserId),
+]);
+
+/**
  * Courses a person added for exam reminders, by the course code the web
  * platform uses. Deleted with the link.
  */

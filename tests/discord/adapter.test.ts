@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  ApplicationCommandOptionType, ChannelType, ComponentType, GuildScheduledEventEntityType,
+  ApplicationCommandOptionType, ApplicationIntegrationType, ChannelType, ComponentType,
+  GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel, InteractionContextType, InteractionType,
   MessageFlags, PermissionFlagsBits, TextInputStyle,
 } from 'discord.js';
@@ -48,6 +49,7 @@ describe('reading an interaction', () => {
       guildId: '900000000000000001',
       channelId: '900000000000000002',
       context: 'guild',
+      installedInServer: true,
       memberPermissions: [],
       applicationPermissions: [],
     });
@@ -156,6 +158,40 @@ describe('reading an interaction', () => {
       guildId: null, context: InteractionContextType.PrivateChannel,
     }) as never);
     expect(group.context).toBe('privateChannel');
+  });
+
+  /**
+   * Section 6.8 of the design: a person who installed the bot to their own
+   * account can use it in a server that has not installed it, and the bot
+   * answers there without posting into a channel it was not invited to. What
+   * tells the two apart is which installation authorized the command, which
+   * Discord names on the interaction itself.
+   */
+  it('reads whether the server this command came from has installed the bot', () => {
+    const installed = toInteraction(chatCommand({
+      authorizingIntegrationOwners: {
+        [ApplicationIntegrationType.GuildInstall]: '900000000000000001',
+      },
+    }) as never);
+    expect(installed.installedInServer).toBe(true);
+
+    const userOnly = toInteraction(chatCommand({
+      authorizingIntegrationOwners: {
+        [ApplicationIntegrationType.UserInstall]: '204255221017214977',
+      },
+    }) as never);
+    expect(userOnly.installedInServer).toBe(false);
+  });
+
+  it('reads a command outside a server as one no server has to have installed', () => {
+    const dm = toInteraction(chatCommand({
+      guildId: null,
+      context: InteractionContextType.BotDM,
+      authorizingIntegrationOwners: {
+        [ApplicationIntegrationType.UserInstall]: '204255221017214977',
+      },
+    }) as never);
+    expect(dm.installedInServer).toBe(true);
   });
 
   it('falls back to the server identifier when the library reports no context', () => {

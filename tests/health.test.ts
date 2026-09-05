@@ -40,6 +40,8 @@ describe('GET /health', () => {
       outboxCursor: null,
       lastPollAt: null,
       schedulerLastTickAt: null,
+      lastPruneAt: null,
+      reconciliationPending: false,
     });
   });
 
@@ -192,5 +194,43 @@ describe('what the health endpoint says about the scheduler', () => {
     });
     expect(status).toBe(200);
     expect(body.schedulerLastTickAt).toBe(null);
+  });
+});
+
+/**
+ * The housekeeping is reported for the same reason the scheduler is. A prune
+ * that stopped happening is invisible until the database is large, and a
+ * reconciliation left pending means a server's Events tab may be out of date,
+ * which is worth seeing rather than guessing at. Neither is a readiness check:
+ * a bot that started this morning has pruned nothing yet.
+ */
+describe('what the health endpoint says about the housekeeping', () => {
+  it('reports when the rows were last pruned and whether a reconciliation is owed', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      housekeeping: () => ({ lastPruneAt: '2026-09-05 04:00:00', reconciliationPending: true }),
+    });
+    expect(status).toBe(200);
+    expect(body.lastPruneAt).toBe('2026-09-05 04:00:00');
+    expect(body.reconciliationPending).toBe(true);
+  });
+
+  it('reports nothing rather than a made up time before the first prune', async () => {
+    const { body } = await health({
+      ...healthyProbes(),
+      housekeeping: () => ({ lastPruneAt: null, reconciliationPending: false }),
+    });
+    expect(body.lastPruneAt).toBe(null);
+    expect(body.reconciliationPending).toBe(false);
+  });
+
+  it('reports nothing rather than failing when the housekeeping state cannot be read', async () => {
+    const { status, body } = await health({
+      ...healthyProbes(),
+      housekeeping: () => { throw new Error('the housekeeping is not wired'); },
+    });
+    expect(status).toBe(200);
+    expect(body.lastPruneAt).toBe(null);
+    expect(body.reconciliationPending).toBe(false);
   });
 });

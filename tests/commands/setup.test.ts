@@ -475,10 +475,14 @@ describe('a feature that cannot work', () => {
     }
   });
 
-  it('blocks every proactive feature in the registry in a server that bound nothing and granted nothing', () => {
-    for (const feature of features.filter(f => f.category === 'proactive')) {
+  it('blocks every proactive feature that posts in a server that bound nothing and granted nothing', () => {
+    // The feedback request is the one proactive feature that posts nowhere in
+    // the server and needs no permission there, so nothing in a server can
+    // stop it working and there is nothing for the panel to say about it.
+    for (const feature of features.filter(f => f.category === 'proactive' && f.id !== 'feedback.request')) {
       expect(blockedReason(feature, { channels: {}, permissions: [] })).not.toBeNull();
     }
+    expect(blockedReason(featureById('feedback.request'), { channels: {}, permissions: [] })).toBeNull();
   });
 
   it('says on the panel why a blocked feature is blocked', () => {

@@ -6,6 +6,36 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+- Feedback after an event, from section 6.4: the morning after an event, the linked people
+  who marked interest in it or asked to be reminded of it receive one direct message with
+  five buttons, a comment through a form, and a button that stops the bot asking again. The
+  score is recorded on VIA as the acting person the moment it is pressed, and the comment
+  is recorded beside it. Both switches are honoured, the person's own and the one a server
+  bound to an organization has for its events, and somebody whose VIA account has gone
+  since the event is passed over in silence.
+- A new table, Interest_Marks, holding who marked interest in which event by Discord
+  account. The web platform holds interest by NetID and by a salted hash, neither of which
+  can be turned back into somebody to write to, and the bot stores no NetID, so it keeps
+  the mark it forwarded. The rows for an event go once its feedback has been asked for, and
+  the rows of a person go when they unlink, along with everything else the bot held.
+- The web platform client grows the feedback endpoint, with the recorded answer of the web
+  platform's contract test beside the other acting endpoints.
+- An answer in a server that has not installed the bot is shown only to the person who
+  asked, whatever the handler would otherwise have chosen, because a person using the bot
+  through their own installation has not invited it into that server's channels. The
+  registry and the command list are now asserted over every feature rather than over an
+  example, so a feature added later without the contexts it needs fails a test.
+- Daily housekeeping: Deliveries and Rate_Windows rows older than ninety days are removed,
+  as section 10 requires. When the outbox cursor has not moved in longer than the web
+  platform keeps the outbox, the cursor can no longer be caught up with, so the bot says so
+  loudly and rebuilds what each server mirrors from the reading endpoints instead. The
+  health endpoint reports when the rows were last pruned and whether a rebuild is still
+  owed.
+- `docs/development.md`, which is how to run the bot from a developer's machine against a
+  local web platform and a development Discord application, and how to run each test
+  project. `docs/deployment.md` is rewritten as the procedure it describes rather than the
+  design of one, and the README's status says what runs now and what nobody has yet
+  exercised against real Discord.
 - The setup features panel is paged by category, because the registry outgrew both what
   Discord will carry in one message and what one menu will offer. Each page lists the
   features of one category with their state and, when a feature cannot work, the reason,
