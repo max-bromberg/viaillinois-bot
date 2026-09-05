@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { REST } from 'discord.js';
 import { loadConfig } from './config.ts';
-import { startHealthServer } from './health.ts';
+import { heldFor, startHealthServer } from './health.ts';
 import { db, pool } from './db/client.ts';
 import { currentVersion } from './db/migrate.ts';
 import { createViaHttpClient } from './via/http.ts';
@@ -27,6 +27,7 @@ import { createInterestRecorder } from './mirror/interest.ts';
 import { createAnnouncementHandlers } from './announce/handlers.ts';
 import { createMidtermHandlers } from './announce/midterms.ts';
 import { createMembershipHandlers } from './announce/membership.ts';
+import { createLinkHandlers } from './identity/links.ts';
 import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
@@ -179,13 +180,26 @@ const consumer = createOutboxConsumer({
       deliveries,
       actions,
       via,
+      feed,
+      deliver: deliverDirectMessage,
       disable,
       websiteUrl: config.viaPublicUrl,
       mirror: scheduledEvents,
       thisWeek,
     }),
-    ...createMidtermHandlers({ feed, deliveries, deliver: deliverDirectMessage }),
+    ...createMidtermHandlers({ feed, deliveries, via, deliver: deliverDirectMessage }),
     ...createMembershipHandlers({ guilds, roles: membershipRoles, directory: netIds }),
+    /**
+     * The two ends of linking. The web platform records the link and the bot
+     * confirms it, and an unlink made on the website reaches the bot only
+     * here, which is where everything it held for that account is deleted.
+     */
+    ...createLinkHandlers({
+      deliveries,
+      deliver: deliverDirectMessage,
+      directory: netIds,
+      deleteLocalData: discordUserId => deleteLocalData(db, discordUserId, { roles: membershipRoles }),
+    }),
   },
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.
@@ -303,7 +317,7 @@ const dispatch = createDispatcher({
   mirrors,
   postMessage: (channelId, reply) => actions.postMessage(channelId, reply),
   postPoll: (channelId, poll) => actions.postPoll(channelId, poll),
-  deleteLocalData: discordUserId => deleteLocalData(db, discordUserId),
+  deleteLocalData: discordUserId => deleteLocalData(db, discordUserId, { roles: membershipRoles }),
   removeGuildPresence: guildId => scheduledEvents.removeGuildPresence(guildId),
   sendDirectMessage: async (discordUserId, content) => {
     await sendDirectMessage(discordUserId, content);
@@ -321,7 +335,12 @@ const health = await startHealthServer({
     await pool.query('SELECT 1');
     return true;
   },
-  viaPlatform: () => via.health(),
+  /**
+   * The answer the web platform gave, held for a few seconds, so that a burst
+   * of hits on the health port is one call to the internal service API rather
+   * than one each.
+   */
+  viaPlatform: heldFor(() => via.health()),
   outboxConsumer: () => consumer.state(),
   scheduler: () => scheduler.state(),
   housekeeping: () => housekeeping.state(),
@@ -331,43 +350,111 @@ console.log(`via-bot ${version}: health listening on port ${health.port}`);
 
 const rest = new REST({ version: '10' }).setToken(config.discordToken);
 
-const commands = buildCommands();
-const registered = await putCommands({
-  rest,
-  applicationId: config.discordApplicationId,
-  commands,
+/**
+ * Everything past the health listener is allowed to fail without taking the
+ * process with it.
+ *
+ * The listener is bound by this point, so a throw here would be a container
+ * that answers its port for a moment and then exits, which reads as a crash
+ * loop rather than as a bot that cannot reach Discord. The honest state is a
+ * process that keeps running and a health endpoint that says what is wrong,
+ * which is what the cutover gates on and what a person looking at the logs
+ * needs to see.
+ */
+async function attempt(what: string, run: () => Promise<void>): Promise<boolean> {
+  try {
+    await run();
+    return true;
+  } catch (err) {
+    console.error(`via-bot: ${what} failed:`, (err as Error).message);
+    return false;
+  }
+}
+
+await attempt('registering the application commands', async () => {
+  const registered = await putCommands({
+    rest,
+    applicationId: config.discordApplicationId,
+    commands: buildCommands(),
+  });
+  console.log(`via-bot: registered ${registered} application commands`);
 });
-console.log(`via-bot: registered ${registered} application commands`);
 
 /**
  * The facts a server can require for a role of its own. Registering them is
  * the bot's whole part in linked roles: the values themselves are pushed by
  * the web platform, which holds the Discord authorization from the link flow.
  */
-const facts = await registerLinkedRoleMetadata({
-  rest,
-  applicationId: config.discordApplicationId,
+await attempt('registering the linked role facts', async () => {
+  const facts = await registerLinkedRoleMetadata({
+    rest,
+    applicationId: config.discordApplicationId,
+  });
+  console.log(`via-bot: registered ${facts} linked role facts`);
 });
-console.log(`via-bot: registered ${facts} linked role facts`);
 
-await gateway.login();
+/** How long the bot waits before trying the gateway again after a login that failed. */
+const LOGIN_RETRY_MS = 30_000;
+
+let loopsRunning = false;
+let loginRetry: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * The consumer and the daily job start once the gateway is up, because both
- * of them post into Discord and neither can until there is a connection to
- * post through. Neither loop is awaited: they run until the process stops.
+ * The loops that post into Discord, started once the gateway is up, because
+ * every one of them posts through it. Nothing here is awaited: they run until
+ * the process stops, and a loop that ended because it threw would leave the
+ * bot silent with nothing in the log, so each of them says so.
  */
-void consumer.start();
-console.log('via-bot: the outbox consumer is running');
-void mirrorWindow.start();
-console.log('via-bot: the mirroring window will be rolled daily');
-void scheduler.start();
-console.log('via-bot: the digests, the reminders, the exams and the this week message are on the clock');
+async function startLoops(): Promise<void> {
+  if (loopsRunning) return;
+  loopsRunning = true;
+
+  // The posts the bot was still owed when it last stopped. This reads the
+  // outbox again from the oldest entry carrying one, and the delivery rows are
+  // what stop anything already posted being posted twice.
+  await attempt('draining the posts that were still owed', async () => {
+    await housekeeping.drainPending();
+  });
+
+  void consumer.start().catch(err =>
+    console.error('via-bot: the outbox consumer stopped:', (err as Error).message));
+  console.log('via-bot: the outbox consumer is running');
+  void mirrorWindow.start().catch(err =>
+    console.error('via-bot: the mirroring window loop stopped:', (err as Error).message));
+  console.log('via-bot: the mirroring window will be rolled daily');
+  void scheduler.start().catch(err =>
+    console.error('via-bot: the job scheduler stopped:', (err as Error).message));
+  console.log('via-bot: the digests, the reminders, the exams and the this week message are on the clock');
+}
+
+/**
+ * Connect to the gateway, and keep trying.
+ *
+ * Discord has outages, and a bot that exits on the first refused login is a
+ * container that restarts every few seconds until the outage is over. So a
+ * login that failed is logged and tried again on a timer, and the health
+ * endpoint reports the gateway as down for as long as it is, which is exactly
+ * what it is for.
+ */
+async function connect(): Promise<void> {
+  if (await attempt('connecting to the Discord gateway', () => gateway.login())) {
+    loginRetry = null;
+    console.log('via-bot: the gateway is connected');
+    await startLoops();
+    return;
+  }
+
+  console.log(`via-bot: trying the gateway again in ${LOGIN_RETRY_MS / 1000} seconds`);
+  loginRetry = setTimeout(() => { void connect(); }, LOGIN_RETRY_MS);
+}
+
+await connect();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, async () => {
     // The loops stop before the connections they use go, so that nothing is
     // half way through a post when the pool closes under it.
+    if (loginRetry) clearTimeout(loginRetry);
     await consumer.stop();
     await mirrorWindow.stop();
     await scheduler.stop();

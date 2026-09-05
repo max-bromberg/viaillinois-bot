@@ -96,4 +96,19 @@ describe('Interest_Marks', () => {
     expect(await marks().listPeople(10)).toEqual([GRACE]);
     expect(await marks().listEvents()).toEqual([10]);
   });
+
+  /**
+   * The Interested button asks whether this person already has a mark before
+   * it decides which way it is being pressed, so that pressing it again takes
+   * the mark back rather than writing it a second time.
+   */
+  it('says whether one person has a mark on one event', async () => {
+    await marks().mark(10, ADA);
+    expect(await marks().hasMark(10, ADA)).toBe(true);
+    expect(await marks().hasMark(10, GRACE)).toBe(false);
+    expect(await marks().hasMark(11, ADA)).toBe(false);
+
+    await marks().unmark(10, ADA);
+    expect(await marks().hasMark(10, ADA)).toBe(false);
+  });
 });

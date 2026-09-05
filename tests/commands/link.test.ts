@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { linkComponent, linkCommand, LINK_POLL_INTERVAL_MS, LINK_POLL_WINDOW_MS } from '../../src/commands/link.ts';
+import { linkComponent, linkCommand } from '../../src/commands/link.ts';
 import { ViaError } from '../../src/via/client.ts';
+import { campusTimeOfDay, relativeTimestamp } from '../../src/render/campusTime.ts';
 import { interaction, testContext } from './support.ts';
 
 describe('the link command', () => {
@@ -19,18 +20,33 @@ describe('the link command', () => {
     expect(via.sessions.map(s => s.discordUserId)).toEqual(['204255221017214977']);
   });
 
-  it('hands out the address and says how long it lasts', async () => {
+  it('hands out the address and offers it as a button', async () => {
     const { context, via } = testContext();
     const reply = await linkCommand.run(interaction(), context);
     const address = via.sessions[0]!.session.address;
     expect(reply.content).toContain(address);
-    expect(reply.content).toContain('ten minutes');
     expect(reply.components?.[0]?.components[0]).toEqual({
       kind: 'button',
       style: 'link',
       label: 'Sign in on viaillinois.com',
       url: address,
     });
+  });
+
+  /**
+   * How long the address lasts is the web platform's answer rather than a
+   * number written here, so it is read from the session and shown as the
+   * campus clock with Discord's relative timestamp beside it, as every other
+   * time in the bot is.
+   */
+  it('says when the address expires, from the moment the session named', async () => {
+    const { context, via } = testContext();
+    const reply = await linkCommand.run(interaction(), context);
+    const expiresAt = via.sessions[0]!.session.expiresAt;
+
+    expect(reply.content).toContain(campusTimeOfDay(expiresAt));
+    expect(reply.content).toContain(relativeTimestamp(expiresAt));
+    expect(reply.content).not.toContain('ten minutes');
   });
 
   // The two dash characters are written as escapes, because the language
@@ -44,34 +60,19 @@ describe('the link command', () => {
     }
   });
 
-  it('waits for the link and then confirms it in one direct message naming the account', async () => {
+  /**
+   * The outbox is how the bot learns that a link was made, which is what
+   * section 4 of the design says and what src/identity/links.ts does. The
+   * command opens the session, hands out the address and is finished: nothing
+   * here waits, and a person who finishes ten minutes later is still
+   * confirmed.
+   */
+  it('schedules no watch of its own, because the outbox is what confirms a link', async () => {
     const { context, via, scheduled, directMessages } = testContext();
-    via.seedLink('204255221017214977', { displayName: 'Rosa Garcia' }, { afterLookups: 3 });
+    via.seedLink('204255221017214977', { displayName: 'Rosa Garcia' });
     await linkCommand.run(interaction(), context);
-    expect(scheduled).toHaveLength(1);
-    await scheduled[0]!();
-    expect(directMessages).toHaveLength(1);
-    expect(directMessages[0]!.discordUserId).toBe('204255221017214977');
-    expect(directMessages[0]!.content).toContain('Rosa Garcia');
-    expect(directMessages[0]!.content).not.toMatch(/[\u2013\u2014]/);
-  });
-
-  it('polls no faster than the interval it names', async () => {
-    const { context, via, scheduled, clockAt } = testContext();
-    via.seedLink('204255221017214977', {}, { afterLookups: 2 });
-    const started = clockAt().getTime();
-    await linkCommand.run(interaction(), context);
-    await scheduled[0]!();
-    expect(clockAt().getTime() - started).toBe(3 * LINK_POLL_INTERVAL_MS);
-  });
-
-  it('stays silent when the link never happens, and gives up inside the window it named', async () => {
-    const { context, scheduled, directMessages, clockAt } = testContext();
-    const started = clockAt().getTime();
-    await linkCommand.run(interaction(), context);
-    await scheduled[0]!();
+    expect(scheduled).toEqual([]);
     expect(directMessages).toEqual([]);
-    expect(clockAt().getTime() - started).toBeLessThanOrEqual(LINK_POLL_WINDOW_MS + LINK_POLL_INTERVAL_MS);
   });
 
   it('says one sentence when the web platform cannot be reached', async () => {
@@ -90,13 +91,6 @@ describe('the link command', () => {
     expect(reply.content).toBe('VIA is busy right now. Please try again in 30 seconds.');
   });
 
-  it('stays silent rather than throwing when the polling itself fails', async () => {
-    const { context, via, scheduled, directMessages } = testContext();
-    await linkCommand.run(interaction(), context);
-    via.failNextWith(new ViaError('The VIA web platform did not answer.', 0, 'unreachable'));
-    await expect(scheduled[0]!()).resolves.toBeUndefined();
-    expect(directMessages).toEqual([]);
-  });
 });
 
 /**

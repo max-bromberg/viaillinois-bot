@@ -1,6 +1,6 @@
 import { ANNOUNCEMENTS_CONSUMER, type OutboxCursors } from '../outbox/cursor.ts';
 import { campusDatePlus, campusStamp, toInstant } from '../render/campusTime.ts';
-import type { Deliveries } from '../delivery/deliveries.ts';
+import { NO_OUTBOX_ENTRY, type Deliveries } from '../delivery/deliveries.ts';
 import type { GuildStore } from '../guilds/store.ts';
 import type { JobHour } from './scheduler.ts';
 import type { RateWindows } from '../ratelimit/windows.ts';
@@ -32,6 +32,15 @@ import type { ScheduledEventMirror } from '../mirror/scheduledEvents.ts';
  * bot has caught up by another route and a cursor left stale would ask for the
  * same rebuild every morning. A reconciliation that failed leaves the cursor
  * where it was and stays pending, which the health endpoint reports.
+ *
+ * The third thing here happens once, at startup, rather than daily, and it is
+ * about the posts the bot was still owing when it stopped. A delivery row that
+ * was written and never posted is a post that has not been made, and for a row
+ * that belongs to an outbox entry the only way to make it is to read that entry
+ * again. So the bot moves the cursor back to just before the oldest entry it
+ * still owes a post for. Everything between there and where the cursor stood
+ * has already been posted, and the delivery rows that say so are what stop any
+ * of it being posted a second time.
  */
 
 /** How long the rows about what the bot did are kept, from section 10 of the design. */
@@ -48,7 +57,7 @@ export const OUTBOX_RETENTION_DAYS = 30;
 export const HOUSEKEEPING_HOUR = 4;
 
 export interface HousekeepingJobOptions {
-  deliveries: Pick<Deliveries, 'pruneBefore'>;
+  deliveries: Pick<Deliveries, 'pruneBefore' | 'pending'>;
   rateWindows: Pick<RateWindows, 'pruneBefore'>;
   cursors: OutboxCursors;
   guilds: GuildStore;
@@ -86,8 +95,23 @@ export interface HousekeepingState {
   reconciliationPending: boolean;
 }
 
+/** What one drain found, which is what the log at startup reads. */
+export interface DrainResult {
+  /** How many posts the bot was still owed. */
+  owed: number;
+  /** The outbox entry the cursor was moved back to, or null when it did not move. */
+  rewoundTo: number | null;
+}
+
 export interface HousekeepingJob {
   run(hour: JobHour): Promise<HousekeepingResult>;
+  /**
+   * Ask the outbox again for the entries the bot still owes a post for. This
+   * belongs to a startup rather than to the daily run: a bot that is running
+   * retries an entry through the consumer's own attempts, and a bot that has
+   * just come back has lost those and has only the delivery rows to go on.
+   */
+  drainPending(): Promise<DrainResult>;
   state(): HousekeepingState;
 }
 
@@ -147,6 +171,34 @@ export function createHousekeepingJob(options: HousekeepingJobOptions): Housekee
   }
 
   return {
+    async drainPending(): Promise<DrainResult> {
+      const owed = await deliveries.pending();
+      if (owed.length === 0) return { owed: 0, rewoundTo: null };
+
+      console.log(`via-bot: ${owed.length} posts were still owed when the bot last stopped`);
+
+      // A post owed for a digest, a reminder or a roll of the mirroring
+      // window belongs to a job on a clock rather than to an outbox entry,
+      // and that job makes it on its next pass without the outbox at all.
+      const fromOutbox = owed.filter(row => row.outboxId !== NO_OUTBOX_ENTRY);
+      if (fromOutbox.length === 0) return { owed: owed.length, rewoundTo: null };
+
+      const oldest = Math.min(...fromOutbox.map(row => row.outboxId));
+      const readFrom = oldest - 1;
+
+      const state = await cursors.state(consumer);
+      // Moving the cursor forward would skip entries nobody has handled, which
+      // is the one thing this must never do.
+      if (!state || state.lastOutboxId <= readFrom) return { owed: owed.length, rewoundTo: null };
+
+      await cursors.advance(consumer, readFrom);
+      console.log(
+        `via-bot: reading the outbox again from entry ${oldest}, which is the oldest one `
+        + 'carrying a post that was never made',
+      );
+      return { owed: owed.length, rewoundTo: readFrom };
+    },
+
     async run(hour: JobHour): Promise<HousekeepingResult> {
       const result: HousekeepingResult = { deliveries: 0, rateWindows: 0, reconciled: 0, failed: 0 };
       if (hour.hour !== runHour) return result;

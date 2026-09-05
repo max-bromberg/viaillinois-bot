@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  scheduleCommand, schedulerComponent, schedulerAcceptComponent, SCHEDULER_BUTTON, POLL_HOURS,
+  scheduleCommand, schedulerComponent, schedulerAcceptComponent, schedulerNameComponent,
+  SCHEDULER_BUTTON, POLL_HOURS,
 } from '../../src/commands/scheduler.ts';
-import { encodeProposal, decodeProposal, encodeAsk } from '../../src/scheduler/proposal.ts';
+import {
+  encodeProposal, encodeNaming, decodeProposal, encodeAsk, NAME_PREFIX,
+} from '../../src/scheduler/proposal.ts';
 import { notAnEditorMessage } from '../../src/commands/shared.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
 import type { CommandContext } from '../../src/commands/types.ts';
@@ -57,10 +60,23 @@ const ask = (overrides: Record<string, string> = {}) => board({
  * about an interaction.
  */
 function answer(one: Interaction, ctx: CommandContext): Promise<Reply> {
-  const handler = (one.customId ?? '').startsWith(SCHEDULER_BUTTON.takePrefix)
-    ? schedulerAcceptComponent
-    : schedulerComponent;
+  const customId = one.customId ?? '';
+  const handler = customId.startsWith(NAME_PREFIX) ? schedulerNameComponent
+    : customId.startsWith(SCHEDULER_BUTTON.takePrefix) ? schedulerAcceptComponent
+      : schedulerComponent;
   return handler.run(one, ctx);
+}
+
+/** The identifier of the button on an answer whose prefix a test names. */
+function buttonWithPrefix(reply: Reply, prefix: string): string {
+  for (const row of reply.components ?? []) {
+    for (const component of row.components) {
+      if (component.kind === 'button' && (component.customId ?? '').startsWith(prefix)) {
+        return component.customId!;
+      }
+    }
+  }
+  throw new Error(`the answer carried no button beginning with ${prefix}`);
 }
 
 /** The identifier of the first accept button on a recommendation message. */
@@ -92,6 +108,26 @@ describe('asking which evenings work', () => {
     const { context: ctx, via } = context();
     await scheduleCommand.run(ask({ span: 'week' }), ctx);
     expect(via.scheduleRequests[0]!.recurrence ?? null).toBe(null);
+    expect(via.scheduleRequests[0]!.dateRange.end).toBe('2026-09-12');
+  });
+
+  /**
+   * The dashboard sends the end of instruction it read from the academic
+   * calendar, and the bot cannot: the internal service API has no endpoint
+   * that answers when the term ends. What it sends instead is a repeat with
+   * no end on it, which is how the same route the dashboard calls says "to the
+   * end of instruction" and reads the date from the calendar itself. The two
+   * surfaces therefore search the same weeks, and the window the bot sends is
+   * only where the first meeting of the repeat is looked for.
+   */
+  it('leaves the end of the repeat to the web platform for a search over the term', async () => {
+    const { context: ctx, via } = context();
+    await scheduleCommand.run(ask({ span: 'term' }), ctx);
+
+    const request = via.scheduleRequests[0]!;
+    expect(request.recurrence).toEqual({ intervalWeeks: 1, daysOfWeek: [] });
+    expect('until' in (request.recurrence as Record<string, unknown>)).toBe(false);
+    expect(request.dateRange.start).toBe('2026-09-05');
   });
 
   it('shows each evening with its score, its clear weeks and its reasons', async () => {
@@ -211,19 +247,53 @@ describe('accepting a recommendation', () => {
     return { started, accept: firstAccept(reply) };
   }
 
-  it('checks the recommendation again and then asks what the repeat is called', async () => {
+  /**
+   * Accepting is two steps rather than one.
+   *
+   * Discord takes a form only as the first thing an application says about an
+   * interaction, which leaves three seconds rather than fifteen minutes. Asking
+   * the scheduler again is a call to the web platform and does not belong
+   * inside that window, so accepting is answered like any other command, with
+   * what it found and a button, and the button opens the form with nothing
+   * behind it.
+   */
+  it('answers with what it found and a button, rather than with a form', async () => {
     const { started, accept } = await recommended();
     const reply = await answer(board({ customId: accept }), started.context);
 
     expect(started.via.calls.filter(call => call === 'recommendSchedule')).toHaveLength(2);
-    expect(reply.modal!.customId).toBe(accept);
+    expect(reply.modal).toBeUndefined();
+    expect(reply.content).toContain('Wednesdays at 6:00 PM');
+    expect(buttonWithPrefix(reply, NAME_PREFIX)).toBeTruthy();
+  });
+
+  it('is answered like any other command, so the check has the longer window', () => {
+    expect(schedulerAcceptComponent.opensModal ?? false).toBe(false);
+  });
+
+  it('opens the form from the button, with no call to the web platform behind it', async () => {
+    const { started, accept } = await recommended();
+    const named = buttonWithPrefix(
+      await answer(board({ customId: accept }), started.context),
+      NAME_PREFIX,
+    );
+    const before = started.via.calls.length;
+
+    const reply = await answer(board({ customId: named }), started.context);
+    expect(reply.modal!.customId).toBe(named);
     expect(reply.modal!.fields.map(field => field.customId)).toContain('title');
+    expect(started.via.calls.length).toBe(before);
+    expect(schedulerNameComponent.opensModal).toBe(true);
   });
 
   it('creates the repeat when the form comes back, and says what was created', async () => {
     const { started, accept } = await recommended();
+    const named = buttonWithPrefix(
+      await answer(board({ customId: accept }), started.context),
+      NAME_PREFIX,
+    );
     const reply = await answer(
-      board({ kind: 'modal', customId: accept, fields: { title: 'Weekly meeting' } }),
+      board({ kind: 'modal', customId: named, fields: { title: 'Weekly meeting' } }),
       started.context,
     );
 
@@ -245,7 +315,7 @@ describe('accepting a recommendation', () => {
   it('refuses a repeat with no name rather than creating one nobody can read', async () => {
     const { started, accept } = await recommended();
     const reply = await answer(
-      board({ kind: 'modal', customId: accept, fields: { title: '   ' } }),
+      board({ kind: 'modal', customId: NAME_PREFIX + accept.slice(SCHEDULER_BUTTON.takePrefix.length), fields: { title: '   ' } }),
       started.context,
     );
     expect(reply.content).toContain('name');
@@ -303,19 +373,58 @@ describe('accepting a recommendation', () => {
     expect(proposal.startTime).toBe('2026-09-16T18:00');
 
     const reply = await answer(board({ customId: accept }), started.context);
-    expect(reply.modal).toBeDefined();
+    expect(buttonWithPrefix(reply, NAME_PREFIX)).toBeTruthy();
+  });
+
+  /**
+   * The scheduler scores an evening as a number of its own, and nothing says
+   * it is whole. A button carries the score rounded, and the check compares
+   * the rounded score, because a score written into an identifier one way and
+   * read back another is an Accept button that never works.
+   */
+  it('accepts an evening the scheduler scored with a fraction', async () => {
+    const started = context();
+    started.via.seedRecommendations({
+      curatedPicks: [{
+        startTime: '2026-09-16 18:00:00',
+        endTime: '2026-09-16 19:00:00',
+        locationId: 5,
+        building: 'Electrical & Computer Eng Bldg',
+        roomNumber: '1002',
+        maxCapacity: 40,
+        score: 87.5,
+        reasons: ['This room is free for 13 of 13 weeks'],
+        intervalWeeks: 1,
+        daysOfWeek: ['Wed'],
+        weeksTotal: 13,
+        weeksClear: 13,
+        conflicts: [],
+        until: '2026-12-09',
+      }],
+      allOptions: [],
+    });
+
+    const accept = firstAccept(await scheduleCommand.run(ask(), started.context));
+    expect(decodeProposal(accept)!.score).toBe(88);
+
+    const reply = await answer(board({ customId: accept }), started.context);
+    expect(reply.content).not.toContain('changed');
+    expect(buttonWithPrefix(reply, NAME_PREFIX)).toBeTruthy();
   });
 
   it('passes on the refusal when the web platform will not create the repeat', async () => {
     const { started, accept } = await recommended();
-    await answer(board({ customId: accept }), started.context);
+    const named = buttonWithPrefix(
+      await answer(board({ customId: accept }), started.context),
+      NAME_PREFIX,
+    );
     started.via.failNextWith(
       Object.assign(new Error('Location is already booked for every date in this repeat'), {
         name: 'ViaError',
       }),
     );
     const reply = await answer(
-      board({ kind: 'modal', customId: accept, fields: { title: 'Weekly meeting' } }),
+      board({ kind: 'modal', customId: named, fields: { title: 'Weekly meeting' } }),
       started.context,
     ).catch(() => ({ content: 'threw' }));
     expect(reply.content).not.toContain('meetings on');
@@ -333,6 +442,33 @@ describe('what an accept button carries', () => {
       score: 91,
     };
     const encoded = encodeProposal(proposal);
+    expect(encoded.length).toBeLessThanOrEqual(100);
+    expect(decodeProposal(encoded)).toEqual(proposal);
+  });
+
+  it('writes a score with a fraction in it as the nearest whole number', () => {
+    const proposal = {
+      ask: { rsoId: 1, span: 'term' as const, minutes: 60, earliestHour: 18, latestHour: 22 },
+      startTime: '2026-09-16T18:00',
+      locationId: 5,
+      intervalWeeks: 1,
+      until: '2026-12-09',
+      score: 87.5,
+    };
+    expect(decodeProposal(encodeProposal(proposal))!.score).toBe(88);
+  });
+
+  it('reads back an identifier written for the button that opens the form', () => {
+    const proposal = {
+      ask: { rsoId: 1, span: 'term' as const, minutes: 60, earliestHour: 18, latestHour: 22 },
+      startTime: '2026-09-16T18:00',
+      locationId: 5,
+      intervalWeeks: 1,
+      until: '2026-12-09',
+      score: 91,
+    };
+    const encoded = encodeNaming(proposal);
+    expect(encoded.startsWith(NAME_PREFIX)).toBe(true);
     expect(encoded.length).toBeLessThanOrEqual(100);
     expect(decodeProposal(encoded)).toEqual(proposal);
   });

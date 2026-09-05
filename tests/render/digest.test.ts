@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  DIGEST_STOP_SENTENCE, REMINDER_STOP_SENTENCE,
-  digestLine, groupByCampusDay, renderDayOfReminder, renderGuildDigest,
+  DIGEST_STOP_SENTENCE, MAX_MESSAGE_LENGTH, REMINDER_STOP_SENTENCE, REST_OF_THE_WEEK,
+  digestLine, fitToMessage, groupByCampusDay, renderDayOfReminder, renderGuildDigest,
   renderPersonalDigest, renderPersonalReminder, renderThisWeek,
 } from '../../src/render/digest.ts';
 import type { ViaEvent } from '../../src/via/client.ts';
@@ -173,5 +173,107 @@ describe('the living this week message', () => {
     });
     expect(reply.content).toContain('6:00 PM');
     expect(reply.content).toContain('nothing coming up');
+  });
+});
+
+/**
+ * What Discord will carry.
+ *
+ * A message longer than two thousand characters is refused outright, so a busy
+ * week would be a digest nobody receives at all. The list is cut a whole day at
+ * a time, because half a Tuesday reads as a fault, and the message says where
+ * the rest of the week is.
+ */
+describe('fitting a week into one message', () => {
+  const day = (label: string, rows: number) => [
+    `**${label}**`,
+    ...Array.from({ length: rows }, (_unused, index) => `- ${index}: ${'x'.repeat(80)}`),
+  ];
+
+  it('leaves a message that already fits exactly as it was', () => {
+    const lines = { head: ['**A week**', ''], days: [day('Mon, Sep 7', 1)], tail: ['', 'Stop me.'] };
+    expect(fitToMessage(lines)).toBe('**A week**\n\n**Mon, Sep 7**\n- 0: ' + 'x'.repeat(80) + '\n\nStop me.');
+  });
+
+  it('never answers with more than Discord will carry', () => {
+    const lines = {
+      head: ['**A week**', ''],
+      days: [day('Mon', 10), day('Tue', 10), day('Wed', 10)],
+      tail: ['', 'Stop me.'],
+    };
+    expect(fitToMessage(lines).length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+  });
+
+  it('drops whole days rather than half of one', () => {
+    const lines = {
+      head: ['**A week**', ''],
+      days: [day('Mon', 10), day('Tue', 10), day('Wed', 10)],
+    };
+    const fitted = fitToMessage(lines);
+    expect(fitted).toContain('**Mon**');
+    expect(fitted).not.toContain('**Wed**');
+    // Every row of a day that was kept is still there.
+    expect(fitted.split('\n').filter(line => line.startsWith('- ')).length % 10).toBe(0);
+  });
+
+  it('says where the rest of the week is when it had to cut', () => {
+    const lines = { head: ['**A week**', ''], days: [day('Mon', 10), day('Tue', 10), day('Wed', 10)] };
+    expect(fitToMessage(lines).endsWith(REST_OF_THE_WEEK)).toBe(true);
+  });
+
+  it('keeps what comes after the list, because that is how a person stops the message', () => {
+    const lines = {
+      head: ['**A week**', ''],
+      days: [day('Mon', 10), day('Tue', 10), day('Wed', 10)],
+      tail: ['', DIGEST_STOP_SENTENCE],
+    };
+    expect(fitToMessage(lines)).toContain(DIGEST_STOP_SENTENCE);
+  });
+
+  it('cuts inside the one day it has when even that will not fit', () => {
+    const lines = { head: ['**A week**', ''], days: [day('Mon', 40)] };
+    const fitted = fitToMessage(lines);
+    expect(fitted.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(fitted).toContain('**Mon**');
+    expect(fitted.endsWith(REST_OF_THE_WEEK)).toBe(true);
+  });
+
+  it('cuts a message with no days in it at all rather than sending one Discord refuses', () => {
+    const lines = { head: ['**A week**', 'y'.repeat(3000)], days: [] };
+    expect(fitToMessage(lines).length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+  });
+});
+
+/**
+ * Every renderer that lists a week has to fit inside one message, because a
+ * week that does not fit is a message Discord refuses outright.
+ */
+describe('the renderers that list a week', () => {
+  const busyWeek = () => Array.from({ length: 120 }, (_unused, index) => event({
+    eventId: index,
+    title: `A meeting with quite a long title, number ${index}`,
+    startTime: `2026-09-0${(index % 3) + 7}T18:00:00-05:00`,
+    endTime: `2026-09-0${(index % 3) + 7}T19:00:00-05:00`,
+  }));
+
+  it('keeps the personal digest inside what Discord will carry', () => {
+    const message = renderPersonalDigest({ weekStart: '2026-09-06', events: busyWeek() });
+    expect(message.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(message).toContain(DIGEST_STOP_SENTENCE);
+  });
+
+  it('keeps the digest a server posts inside what Discord will carry', () => {
+    const reply = renderGuildDigest({ weekStart: '2026-09-06', events: busyWeek() });
+    expect(reply.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+  });
+
+  it('keeps the living this week message inside what Discord will carry', () => {
+    const reply = renderThisWeek({
+      weekStart: '2026-09-06',
+      events: busyWeek(),
+      updatedAt: new Date('2026-09-07T14:30:00Z'),
+    });
+    expect(reply.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(reply.content).toContain('Last brought up to date');
   });
 });

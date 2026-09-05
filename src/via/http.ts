@@ -44,6 +44,19 @@ export const REQUEST_ID_HEADER = 'X-Via-Request-Id';
 /** What the bot waits when a busy answer names no wait of its own. */
 export const DEFAULT_RETRY_AFTER_SECONDS = 5;
 
+/**
+ * The longest the bot waits before trying a busy request again, and the
+ * longest wait it will name to a person.
+ *
+ * The wait comes from the web platform, which is right: it knows how loaded it
+ * is. What it does not know is that the bot is often holding a Discord
+ * interaction open while it waits, and Discord closes that after fifteen
+ * minutes. A wait of an hour would therefore be a command that never answers,
+ * so the wait is taken as far as a minute and no further. The bot still does
+ * not retry inside the wait, which is what section 9 of the design asks for.
+ */
+export const MAX_RETRY_AFTER_SECONDS = 60;
+
 /** How long a single request may take before the bot gives up on it. */
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -115,6 +128,11 @@ function messageOf(body: unknown, fallback: string): string {
 
 /** A busy answer names its wait in the body, and in a header for anything that reads headers. */
 function retryAfterOf(headerValue: string | null, body: unknown): number {
+  const named = namedRetryAfter(headerValue, body);
+  return Math.min(named, MAX_RETRY_AFTER_SECONDS);
+}
+
+function namedRetryAfter(headerValue: string | null, body: unknown): number {
   const fromBody = (body as Record<string, unknown> | null)?.retry_after_seconds;
   if (typeof fromBody === 'number' && Number.isFinite(fromBody) && fromBody > 0) return Math.ceil(fromBody);
   const fromHeader = Number(headerValue);

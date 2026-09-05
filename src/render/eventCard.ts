@@ -42,6 +42,13 @@ export interface CardOptions {
    * opens carries the administrative buttons.
    */
   manageable?: boolean;
+  /**
+   * The identifier of the listing this card was opened from, when it was
+   * opened from one. A card opened from a listing replaces the listing,
+   * because it is the same message edited in place, so the way back to it has
+   * to be on the card.
+   */
+  backTo?: string | null;
 }
 
 /** The identifiers the card's own buttons carry, which the commands answer. */
@@ -251,16 +258,33 @@ export function renderEventCard(event: ViaEvent, options: CardOptions): Reply {
     linkButton('Open on VIA', eventAddress(event.eventId, options.websiteUrl)),
   ];
 
+  const rows: ReplyRow[] = [{ kind: 'row', components: everybody }];
+
+  /**
+   * The two buttons that are about the card rather than about the event: the
+   * one that opens it again with the board actions on it, and the one that
+   * goes back to the listing it was opened from. They sit in a row of their
+   * own because Discord takes five buttons in a row and the four above are
+   * what everybody gets.
+   */
+  const aboutTheCard: ReplyButton[] = [];
   if (options.manageable) {
-    everybody.push({
+    aboutTheCard.push({
       kind: 'button',
       style: 'secondary',
       label: 'Manage this event',
       customId: CARD_ADMIN_BUTTON.manage(event.eventId),
     });
   }
-
-  const rows: ReplyRow[] = [{ kind: 'row', components: everybody }];
+  if (options.backTo) {
+    aboutTheCard.push({
+      kind: 'button',
+      style: 'secondary',
+      label: 'Back to the list',
+      customId: options.backTo,
+    });
+  }
+  if (aboutTheCard.length > 0) rows.push({ kind: 'row', components: aboutTheCard });
 
   // Discord takes five buttons in a row, and there are six administrative
   // actions, so they sit in two rows in the order a board does them.

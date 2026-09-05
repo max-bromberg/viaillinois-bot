@@ -33,6 +33,11 @@ export interface InterestMarks {
   mark(eventId: number, discordUserId: string): Promise<boolean>;
   /** Forget a mark, answering whether there was one to forget. */
   unmark(eventId: number, discordUserId: string): Promise<boolean>;
+  /**
+   * Whether one person has a mark on one event, which is what the Interested
+   * button asks before it decides which way it is being pressed.
+   */
+  hasMark(eventId: number, discordUserId: string): Promise<boolean>;
   /** The Discord accounts that marked interest in one event. */
   listPeople(eventId: number): Promise<string[]>;
   /** Every event anybody has an outstanding mark on, oldest identifier first. */
@@ -83,6 +88,14 @@ export function createInterestMarks(db: BotDatabase, options: InterestMarksOptio
         eq(interestMarks.discordUserId, discordUserId),
       ));
       return true;
+    },
+
+    async hasMark(eventId: number, discordUserId: string): Promise<boolean> {
+      const [row] = await db.select().from(interestMarks).where(and(
+        eq(interestMarks.eventId, eventId),
+        eq(interestMarks.discordUserId, discordUserId),
+      ));
+      return Boolean(row);
     },
 
     async listPeople(eventId: number): Promise<string[]> {

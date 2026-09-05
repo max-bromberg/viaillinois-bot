@@ -465,4 +465,16 @@ describe('the feature registry', () => {
     expect(feature.channelPurposes).toEqual([]);
     expect(feature.command).toBeUndefined();
   });
+
+  /**
+   * A feature that pins needs the permission to pin. The weekly digest can be
+   * pinned, with the one before it unpinned, whenever a server asks for that
+   * in the timing panel, and a feature whose permission is not declared is one
+   * setup will happily switch on and that then fails in silence.
+   */
+  it('asks for the permission to pin wherever a feature can pin', () => {
+    for (const id of ['announce.digest', 'living.thisweek']) {
+      expect(featureById(id).requiredPermissions).toContain('ManageMessages');
+    }
+  });
 });

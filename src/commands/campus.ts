@@ -36,8 +36,18 @@ const NEXT_HOUR_MS = 60 * 60 * 1000;
 export const NOT_A_BUILDING_MESSAGE =
   'Please name a building, either by choosing one from the list Discord offers as you type or by typing its code, such as ECEB.';
 
-export const NO_SUCH_BUILDING_MESSAGE =
-  'VIA does not know that building code, so there is nothing to show. Please choose a building from the list Discord offers as you type.';
+/**
+ * What somebody reads when VIA has no record of the building they asked about.
+ *
+ * The codes the option completes from are the bot's own list, so the bot can
+ * complete a code the web platform turns out to know nothing about. Telling
+ * the person to choose from the list they just chose from would blame them for
+ * something the bot did, so the answer names what was asked for and says where
+ * the gap is.
+ */
+export function noSuchBuildingMessage(typed: string): string {
+  return `VIA has no record of the building ${typed}. It may not be in the listing the bot reads.`;
+}
 
 /**
  * The building codes the bot completes from.
@@ -128,7 +138,9 @@ async function completeBuildings(
 export const roomsCommand: CommandHandler = {
   featureId: roomsFeature.id,
   name: roomsFeature.command!.name,
-  ephemeral: true,
+  // A campus lookup answers the channel in a server that invited the bot,
+  // because the answer does not depend on who is asking.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const building = String(interaction.options.building ?? '').trim();
@@ -149,7 +161,9 @@ export const roomsCommand: CommandHandler = {
 export const courseCommand: CommandHandler = {
   featureId: courseFeature.id,
   name: courseFeature.command!.name,
-  ephemeral: true,
+  // A campus lookup answers the channel in a server that invited the bot,
+  // because the answer does not depend on who is asking.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     try {
@@ -167,7 +181,9 @@ export const courseCommand: CommandHandler = {
 export const buildingCommand: CommandHandler = {
   featureId: buildingFeature.id,
   name: buildingFeature.command!.name,
-  ephemeral: true,
+  // A campus lookup answers the channel in a server that invited the bot,
+  // because the answer does not depend on who is asking.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const typed = String(interaction.options.building ?? '').trim();
@@ -175,7 +191,7 @@ export const buildingCommand: CommandHandler = {
 
     try {
       const building = await context.via.getBuilding(typed);
-      if (!building) return { content: NO_SUCH_BUILDING_MESSAGE };
+      if (!building) return { content: noSuchBuildingMessage(typed) };
       return { content: renderBuilding(building) };
     } catch (err) {
       return campusAnswerFor(err);

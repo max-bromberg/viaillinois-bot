@@ -3,7 +3,8 @@ import { ViaBusyError, ViaError } from '../../src/via/client.ts';
 import {
   postponeCommand, cancelCommand, describeCommand, visibilityCommand, repostCommand,
   noteCommand, adminComponent, adminFormComponent, ADMIN_BUTTON, FORM_PREFIX,
-  NOT_LINKED_TO_ACT_MESSAGE, notAnEditorMessage,
+  NOT_LINKED_TO_ACT_MESSAGE, NOT_FOLLOWED_HERE_MESSAGE, NO_ANNOUNCEMENTS_CHANNEL_MESSAGE,
+  notAnEditorMessage,
 } from '../../src/commands/admin.ts';
 import { renderEventCard } from '../../src/render/eventCard.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
@@ -24,6 +25,8 @@ import { interaction, testContext, type TestContext } from './support.ts';
 
 const GUILD = '900000000000000001';
 const CHANNEL = '900000000000000002';
+/** The channel this server bound to announcements, which is where one goes. */
+const ANNOUNCEMENTS = '700000000000000001';
 const ROSA = '204255221017214977';
 const EVENT = 10;
 
@@ -138,6 +141,38 @@ describe('the editor check every administrative action goes through', () => {
       expect(reply.content).toContain('Please try again in 30 seconds.');
     });
   }
+
+  /**
+   * The refusal a person reads is the web platform's own words with a sentence
+   * of the bot's after them, so the web platform's words have to be a sentence
+   * before they are spliced. The dash characters are written as escapes here,
+   * because the language check reads this file too.
+   */
+  it('gives the web platform sentence a full stop before adding one of its own', async () => {
+    const { context, via } = withEditor();
+    via.failNextWith(new ViaError('That room is already booked at that time', 409, 'conflict'));
+    const reply = await answer(press(ADMIN_BUTTON.confirmCancel(EVENT)), context);
+    expect(reply.content).toBe('That room is already booked at that time. Nothing has been changed.');
+  });
+
+  it('writes a dash the web platform sent as the comma the language rule asks for', async () => {
+    const { context, via } = withEditor();
+    via.failNextWith(new ViaError(
+      `The room is taken \u2014 by a class`,
+      409,
+      'conflict',
+    ));
+    const reply = await answer(press(ADMIN_BUTTON.confirmCancel(EVENT)), context);
+    expect(reply.content).toBe('The room is taken, by a class. Nothing has been changed.');
+    expect(reply.content).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it('leaves a sentence that is already one exactly as the web platform wrote it', async () => {
+    const { context, via } = withEditor();
+    via.failNextWith(new ViaError('The start time must come before the end time.', 400, 'invalid'));
+    const reply = await answer(press(ADMIN_BUTTON.visibility(EVENT)), context);
+    expect(reply.content).toBe('The start time must come before the end time. Nothing has been changed.');
+  });
 });
 
 describe('moving an event to a new time', () => {
@@ -279,30 +314,78 @@ describe('the note about where an event is', () => {
 });
 
 describe('posting an announcement again', () => {
-  it('posts the card in the announcements channel when the server bound one', async () => {
-    const { context, guilds, posted } = withEditor();
+  /** A server that follows the organization and has bound a channel to announcements. */
+  async function following(guilds: TestContext['guilds']) {
     await guilds.createInstallation(GUILD, ROSA);
-    await guilds.bindChannel(GUILD, 'announcements', '700000000000000001');
+    await guilds.setKind(GUILD, 'rso');
+    await guilds.setBinding(GUILD, { binding: 'rso', rsoId: 1 });
+    await guilds.bindChannel(GUILD, 'announcements', ANNOUNCEMENTS);
+  }
+
+  it('posts the card in the channel this server bound to announcements', async () => {
+    const { context, guilds, posted } = withEditor();
+    await following(guilds);
 
     const reply = await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
 
     expect(posted).toHaveLength(1);
-    expect(posted[0]!.channelId).toBe('700000000000000001');
+    expect(posted[0]!.channelId).toBe(ANNOUNCEMENTS);
     expect(posted[0]!.reply.content).toContain('General meeting');
-    expect(reply.content).toContain('<#700000000000000001>');
+    expect(reply.content).toContain(`<#${ANNOUNCEMENTS}>`);
   });
 
-  it('posts in the channel the command was run in when no announcements channel is bound', async () => {
+  /**
+   * An announcement goes where the server said announcements go, and nowhere
+   * else. Posting into whichever channel the command happened to be run in
+   * would let one editor put an announcement in any channel of any server the
+   * bot is in, which is not a decision an editor of an organization makes.
+   */
+  it('never posts into the channel the command was run in', async () => {
+    const { context, guilds, posted } = withEditor();
+    await following(guilds);
+    await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
+    expect(posted.map(one => one.channelId)).not.toContain(CHANNEL);
+  });
+
+  it('refuses in a server that has bound no announcements channel', async () => {
     const { context, guilds, posted } = withEditor();
     await guilds.createInstallation(GUILD, ROSA);
+    await guilds.setKind(GUILD, 'rso');
+    await guilds.setBinding(GUILD, { binding: 'rso', rsoId: 1 });
+
+    const reply = await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
+    expect(reply.content).toBe(NO_ANNOUNCEMENTS_CHANNEL_MESSAGE);
+    expect(posted).toEqual([]);
+  });
+
+  it('refuses in a server that does not follow the organization', async () => {
+    const { context, guilds, posted } = withEditor();
+    await guilds.createInstallation(GUILD, ROSA);
+    await guilds.setKind(GUILD, 'rso');
+    await guilds.setBinding(GUILD, { binding: 'rso', rsoId: 9 });
+    await guilds.bindChannel(GUILD, 'announcements', ANNOUNCEMENTS);
+
+    const reply = await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
+    expect(reply.content).toBe(NOT_FOLLOWED_HERE_MESSAGE);
+    expect(posted).toEqual([]);
+  });
+
+  it('posts in a community server whose chosen set contains the organization', async () => {
+    const { context, guilds, posted } = withEditor();
+    await guilds.createInstallation(GUILD, ROSA);
+    await guilds.setKind(GUILD, 'community');
+    await guilds.setBinding(GUILD, { binding: 'set' });
+    await guilds.setFollowedRsos(GUILD, [1, 9]);
+    await guilds.bindChannel(GUILD, 'announcements', ANNOUNCEMENTS);
+
     await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
-    expect(posted[0]!.channelId).toBe(CHANNEL);
+    expect(posted).toHaveLength(1);
   });
 
   it('writes down the new announcement, so that a later change edits this one', async () => {
     const recorded: Array<{ guildId: string; eventId: number; messageId: string }> = [];
     const { context, guilds } = withEditor();
-    await guilds.createInstallation(GUILD, ROSA);
+    await following(guilds);
 
     await answer(press(ADMIN_BUTTON.repost(EVENT)), {
       ...context,
@@ -317,15 +400,16 @@ describe('posting an announcement again', () => {
   });
 
   it('posts nothing at all for somebody the web platform does not list as an editor', async () => {
-    const { context, via, posted } = testContext();
+    const { context, via, guilds, posted } = testContext();
     via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'member' }] });
+    await following(guilds);
     await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
     expect(posted).toEqual([]);
   });
 
   it('reaches the same posting from the command', async () => {
     const { context, guilds, posted } = withEditor();
-    await guilds.createInstallation(GUILD, ROSA);
+    await following(guilds);
     await repostCommand.run(
       board({ kind: 'chatCommand', commandName: 'via repost', options: { event: String(EVENT) } }),
       context,

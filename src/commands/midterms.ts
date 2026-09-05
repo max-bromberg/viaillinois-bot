@@ -85,7 +85,9 @@ export async function completeCourses(
 export const midtermsCommand: CommandHandler = {
   featureId: lookupFeature.id,
   name: lookupFeature.command!.name,
-  ephemeral: true,
+  // The exams of a course are the same answer for everybody, so a server
+  // that invited the bot reads them in the channel they were asked for in.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     try {

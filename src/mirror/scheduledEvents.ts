@@ -1,7 +1,7 @@
 import { featureById, type DiscordPermission } from '../features/registry.ts';
 import { campusDatePlus, campusToday, toInstant } from '../render/campusTime.ts';
 import { placeOf, trimDescription } from '../render/eventCard.ts';
-import { NO_OUTBOX_ENTRY, guildTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { guildTarget, type Deliveries } from '../delivery/deliveries.ts';
 import {
   isMissingAccess, isMissingMessage, type DiscordActions, type ScheduledEventDraft,
 } from '../discord/adapter.ts';
@@ -60,8 +60,12 @@ export interface ScheduledEventMirror {
    * Create or edit the scheduled event for one VIA event in one server. An
    * event inside the window that has no scheduled event yet gets one; an event
    * that already has one has it kept in step wherever it has moved to.
+   *
+   * The outbox entry the work came from is what makes a creation happen once
+   * even if the entry is handled twice. A roll of the window belongs to no
+   * entry and passes null, which is what says to read Event_Mirrors instead.
    */
-  apply(installation: GuildInstallation, event: ViaEvent, outboxId: number): Promise<void>;
+  apply(installation: GuildInstallation, event: ViaEvent, outboxId: number | null): Promise<void>;
   /** Delete the scheduled event for one VIA event in one server, if there is one. */
   remove(installation: GuildInstallation, eventId: number): Promise<void>;
   /** Roll one server's window forward, creating what has entered it. */
@@ -72,15 +76,30 @@ export interface ScheduledEventMirror {
   removeGuildPresence(guildId: string): Promise<RemovedGuildPresence>;
 }
 
+/**
+ * How long a scheduled event's name and location may be. Discord refuses
+ * anything longer outright, and a title or a room written on VIA is bounded by
+ * neither of those, so both are cut here. A refusal would be an event missing
+ * from the tab with nothing in the channel to say why.
+ */
+export const MAX_SCHEDULED_EVENT_FIELD = 100;
+
+/** A field cut to what Discord will take, with nothing added to say so. */
+function fitField(value: string): string {
+  return value.length <= MAX_SCHEDULED_EVENT_FIELD
+    ? value
+    : value.slice(0, MAX_SCHEDULED_EVENT_FIELD);
+}
+
 /** What a Discord scheduled event says, drawn from the event itself. */
 export function draftOf(event: ViaEvent): ScheduledEventDraft {
   const description = trimDescription(event.description);
   return {
-    name: event.title,
+    name: fitField(event.title),
     ...(description ? { description } : {}),
     startTime: event.startTime,
     endTime: event.endTime,
-    location: placeOf(event),
+    location: fitField(placeOf(event)),
   };
 }
 
@@ -151,7 +170,11 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
     await deleteScheduledEvent(installation.guildId, eventId, held.scheduledEventId);
   }
 
-  async function apply(installation: GuildInstallation, event: ViaEvent, outboxId: number): Promise<void> {
+  async function apply(
+    installation: GuildInstallation,
+    event: ViaEvent,
+    outboxId: number | null,
+  ): Promise<void> {
     const guildId = installation.guildId;
     if (!(await guilds.isFeatureEnabled(guildId, MIRROR_FEATURE))) return;
 
@@ -175,6 +198,21 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
       return;
     }
 
+    /**
+     * A roll of the window belongs to no outbox entry, so there is no key a
+     * delivery row could be written under that says anything about this roll
+     * rather than about every roll the server will ever make. What says
+     * whether the event is in the tab is the Event_Mirrors row, which the
+     * unique key over the server and the event makes exactly one of, and
+     * which the read above has already answered with. So the roll creates
+     * what has no scheduled event and writes down what it made.
+     */
+    if (outboxId === null) {
+      const rolled = await actions.createScheduledEvent(guildId, draftOf(event));
+      await mirrors.recordScheduledEvent(guildId, event.eventId, rolled);
+      return;
+    }
+
     const intended = await deliveries.intend({
       outboxId,
       target: guildTarget(guildId),
@@ -182,7 +220,9 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
       kind: 'scheduled_event',
     });
 
-    if (!intended.isNew) {
+    // A row that carries the moment it was posted is a scheduled event that
+    // was created, and a row that carries none is one that is still owed.
+    if (!intended.isNew && intended.deliveredAt !== null) {
       // The scheduled event was created and the row that says so was not
       // written, which is the crash this delivery row exists to survive.
       if (intended.messageId) {
@@ -227,7 +267,7 @@ export function createScheduledEventMirror(options: ScheduledEventMirrorOptions)
       const page = await via.listEvents(query);
       let mirrored = 0;
       for (const event of page.events) {
-        await apply(installation, event, NO_OUTBOX_ENTRY);
+        await apply(installation, event, null);
         mirrored += 1;
       }
       return mirrored;

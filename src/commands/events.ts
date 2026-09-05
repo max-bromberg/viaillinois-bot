@@ -61,6 +61,11 @@ export function interestedMessage(title: string, interestCount: number): string 
   return `You are marked as interested in ${title}. ${others}`;
 }
 
+/** What somebody reads once their interest has been taken back. */
+export function noLongerInterestedMessage(title: string): string {
+  return `You are no longer marked as interested in ${title}.`;
+}
+
 const WINDOWS: ListingWindow[] = ['today', 'thisweek', 'nextweek', 'thismonth'];
 
 function windowOf(value: unknown): ListingWindow | null {
@@ -83,6 +88,47 @@ export interface ListingRequest {
 
 export const EVENTS_PAGE_PREFIX = 'events:page';
 export const EVENTS_OPEN_PREFIX = 'events:open';
+
+/**
+ * The button that opens one row of a listing.
+ *
+ * It carries the listing as well as the event, because the card it opens
+ * replaces the listing in the same message and the way back has to be on the
+ * card. A button posted by an older version of the bot carries the event
+ * alone, which still opens the card and simply offers no way back.
+ */
+export function encodeOpen(eventId: number, request: ListingRequest): string {
+  return [
+    EVENTS_OPEN_PREFIX,
+    String(eventId),
+    request.rsoId === null ? 'any' : String(request.rsoId),
+    request.window ?? 'any',
+    request.includeInternal ? '1' : '0',
+    String(request.offset),
+  ].join(':');
+}
+
+export function decodeOpen(customId: string): { eventId: number; request: ListingRequest | null } | null {
+  const parts = customId.split(':');
+  // The prefix carries a colon of its own, so the event is the third part.
+  if (parts.length < 3 || `${parts[0]}:${parts[1]}` !== EVENTS_OPEN_PREFIX) return null;
+  const eventId = identifier(parts[2]);
+  if (eventId === null) return null;
+  if (parts.length !== 7) return { eventId, request: null };
+
+  const [, , , rso, window, internal, page] = parts;
+  const offset = identifier(page);
+  if (offset === null) return { eventId, request: null };
+  return {
+    eventId,
+    request: {
+      rsoId: rso === 'any' ? null : identifier(rso),
+      window: windowOf(window),
+      includeInternal: internal === '1',
+      offset,
+    },
+  };
+}
 
 export function encodeListing(request: ListingRequest): string {
   return [
@@ -162,7 +208,7 @@ async function listing(
       ? encodeListing({ ...request, offset: Math.max(0, request.offset - PAGE_SIZE) })
       : null,
     nextId: hasNext ? encodeListing({ ...request, offset: request.offset + PAGE_SIZE }) : null,
-    openId: (event: ViaEvent) => `${EVENTS_OPEN_PREFIX}:${event.eventId}`,
+    openId: (event: ViaEvent) => encodeOpen(event.eventId, request),
   });
 }
 
@@ -179,7 +225,10 @@ async function completeRsos(interaction: Interaction, context: CommandContext): 
 export const eventsCommand: CommandHandler = {
   featureId: listFeature.id,
   name: listFeature.command!.name,
-  ephemeral: true,
+  // A reading command answers the channel in a server that invited the bot,
+  // because the question it answers is the channel's too. In a server that
+  // did not invite it, the dispatcher answers only the person who asked.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const rsoOption = interaction.options.rso;
@@ -217,16 +266,23 @@ export const eventsComponent: ComponentHandler = {
     const customId = interaction.customId ?? '';
 
     if (customId.startsWith(`${EVENTS_OPEN_PREFIX}:`)) {
-      const eventId = identifier(customId.slice(EVENTS_OPEN_PREFIX.length + 1));
-      if (eventId === null) return { content: EVENT_GONE_MESSAGE };
+      const opened = decodeOpen(customId);
+      if (!opened) return { content: EVENT_GONE_MESSAGE };
       let event;
       try {
-        event = await context.via.getEvent(eventId, interaction.userId);
+        event = await context.via.getEvent(opened.eventId, interaction.userId);
       } catch (err) {
         return answerFor(err);
       }
       if (!event) return { content: EVENT_GONE_MESSAGE };
-      return renderEventCard(event, { websiteUrl: context.websiteUrl });
+      return renderEventCard(event, {
+        websiteUrl: context.websiteUrl,
+        // The card is answered privately to whoever pressed the row button, so
+        // it carries the way into the board actions, exactly as the card an
+        // announcement opens does.
+        manageable: true,
+        backTo: opened.request ? encodeListing(opened.request) : null,
+      });
     }
 
     const request = decodeListing(customId);
@@ -238,7 +294,10 @@ export const eventsComponent: ComponentHandler = {
 export const eventCommand: CommandHandler = {
   featureId: detailFeature.id,
   name: detailFeature.command!.name,
-  ephemeral: true,
+  // A reading command answers the channel in a server that invited the bot,
+  // because the question it answers is the channel's too. In a server that
+  // did not invite it, the dispatcher answers only the person who asked.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const eventId = identifier(interaction.options.event);
@@ -251,7 +310,9 @@ export const eventCommand: CommandHandler = {
       return answerFor(err);
     }
     if (!event) return { content: NO_SUCH_EVENT_MESSAGE };
-    return renderEventCard(event, { websiteUrl: context.websiteUrl });
+    // The card carries the way into the board actions, which opens it again
+    // for whoever presses it with the actions the web platform allows them.
+    return renderEventCard(event, { websiteUrl: context.websiteUrl, manageable: true });
   },
 
   /**
@@ -326,6 +387,15 @@ export const eventComponent: ComponentHandler = {
       const needsLink = await requireLink(interaction, context);
       if (needsLink) return needsLink;
 
+      /**
+       * Pressing the button a second time takes the mark back, exactly as the
+       * Remind me button beside it does. Whether there is one to take back is
+       * read from the marks the bot wrote down, because the web platform holds
+       * interest by NetID and by a salted hash and answers with a count rather
+       * than with whether this person is in it.
+       */
+      const marked = Boolean(await context.interestMarks?.hasMark(eventId, interaction.userId));
+
       let event;
       let answer;
       try {
@@ -335,7 +405,7 @@ export const eventComponent: ComponentHandler = {
         // header names, and answers with the count after it, which is what
         // the person who pressed the button wants to know.
         answer = await context.via.setInterest(eventId, {
-          interested: true,
+          interested: !marked,
           actingDiscordUserId: interaction.userId,
         });
       } catch (err) {
@@ -350,7 +420,8 @@ export const eventComponent: ComponentHandler = {
       // a mark that cannot be written costs a feedback request rather than the
       // answer to what the person actually pressed.
       try {
-        await context.interestMarks?.mark(eventId, interaction.userId);
+        if (marked) await context.interestMarks?.unmark(eventId, interaction.userId);
+        else await context.interestMarks?.mark(eventId, interaction.userId);
       } catch (err) {
         console.error(
           `writing down the interest of ${interaction.userId} in event ${eventId} failed:`,
@@ -358,7 +429,11 @@ export const eventComponent: ComponentHandler = {
         );
       }
 
-      return { content: interestedMessage(event.title, answer.interestCount) };
+      return {
+        content: marked
+          ? noLongerInterestedMessage(event.title)
+          : interestedMessage(event.title, answer.interestCount),
+      };
     }
 
     if (customId === EVENT_BUTTON.remind(eventId)) {
@@ -383,7 +458,10 @@ export const eventComponent: ComponentHandler = {
 export const rsoCommand: CommandHandler = {
   featureId: rsoFeature.id,
   name: rsoFeature.command!.name,
-  ephemeral: true,
+  // A reading command answers the channel in a server that invited the bot,
+  // because the question it answers is the channel's too. In a server that
+  // did not invite it, the dispatcher answers only the person who asked.
+  ephemeral: false,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const rsoId = identifier(interaction.options.rso);

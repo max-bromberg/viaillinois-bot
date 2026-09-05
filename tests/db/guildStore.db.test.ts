@@ -354,6 +354,30 @@ describe('the server records', () => {
     });
   });
 
+  /**
+   * Removal is six deletes across six tables, and a manager who ran it has
+   * been told that the bot is gone from the server. Half of it done is a
+   * server whose bot is neither set up nor removed, which nobody can put
+   * right from Discord, so the six run inside one transaction and either all
+   * of them happen or none of them does.
+   */
+  it('leaves every row where it was when one of the deletes fails', async () => {
+    await store().createInstallation(guild, manager);
+    await store().setFeatureEnabled(guild, 'events.list', false);
+    await store().bindChannel(guild, 'announcements', '700000000000000001');
+    await store().setFollowedRsos(guild, [4]);
+
+    // A table the delete needs and cannot reach is the shape of every failure
+    // part way through, and it is the only one a test can arrange.
+    await pool.query('DROP TABLE Guild_Role_Mappings');
+    await expect(store().removeGuild(guild)).rejects.toThrow();
+
+    expect(await store().getInstallation(guild)).not.toBeNull();
+    expect(await store().listChannels(guild)).toEqual({ announcements: '700000000000000001' });
+    expect(await store().listFollowedRsos(guild)).toEqual([4]);
+    expect(await store().listFeatureChanges(guild)).toEqual({ 'events.list': false });
+  });
+
   it('says it deleted nothing for a server the bot was never installed in', async () => {
     expect(await store().removeGuild(guild)).toEqual({
       features: 0, channels: 0, followedRsos: 0, installation: false,

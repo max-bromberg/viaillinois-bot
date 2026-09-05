@@ -42,7 +42,7 @@ export const EXAM_LOOKAHEAD_DAYS = 2;
 export interface ExamReminderJobOptions {
   feed: FeedStore;
   deliveries: Deliveries;
-  via: Pick<ViaClient, 'listMidterms'>;
+  via: Pick<ViaClient, 'listMidterms' | 'getLink'>;
   deliver: DirectMessageDelivery;
 }
 
@@ -86,6 +86,14 @@ export function createExamReminderJob(options: ExamReminderJobOptions): ExamRemi
             const preferences = await feed.preferences(discordUserId);
             if (preferences.directMessageOptOut) continue;
 
+            // Section 10 of the design: the bot writes only to linked people.
+            // A course left behind by a link the bot never heard go away
+            // would otherwise become a message nobody asked for.
+            if (!(await via.getLink(discordUserId))) {
+              result.skipped += 1;
+              continue;
+            }
+
             const dueAt = start.getTime() - preferences.reminderLeadMinutes * 60_000;
             if (hour.at.getTime() < dueAt) continue;
 
@@ -95,9 +103,10 @@ export function createExamReminderJob(options: ExamReminderJobOptions): ExamRemi
               purpose: examReminderPurpose(midterm.midtermId),
               kind: 'direct_message',
             });
-            // Somebody, possibly this job before it fell over, has already
-            // written to this person about this exam.
-            if (!intended.isNew) {
+            // A row that carries the moment it was posted is a message that
+            // has arrived. A row that carries none was written and never sent,
+            // which is a message this person is still owed.
+            if (!intended.isNew && intended.deliveredAt !== null) {
               result.skipped += 1;
               continue;
             }

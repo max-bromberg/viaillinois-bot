@@ -217,6 +217,39 @@ describe('running the jobs on the campus clock', () => {
     expect(scheduler.state().lastTickAt).toBe('2026-09-06 18:20:00');
   });
 
+  /**
+   * A loop that ends because something outside it threw is a bot that has
+   * quietly stopped sending anything, and nothing about it looks wrong from
+   * outside. Every pass is guarded, exactly as the outbox consumer's is, so a
+   * database that refused one write costs one pass rather than the term.
+   */
+  it('carries on to the next pass when a pass itself throws', async () => {
+    const waits: number[] = [];
+    let ran = 0;
+    const runs = memoryJobRuns();
+    const failing = {
+      lastRunAt: runs.lastRunAt,
+      async recordRun(jobName: string, at: string) {
+        if (ran === 1) throw new Error('the database did not answer');
+        await runs.recordRun(jobName, at);
+      },
+    };
+
+    const scheduler = createJobScheduler({
+      runs: failing,
+      jobs: [{ name: 'guild.digest', cadence: 'tick', async run() { ran += 1; } }],
+      now: () => new Date('2026-09-06T23:20:00Z'),
+      sleep: async (milliseconds: number) => {
+        waits.push(milliseconds);
+        if (waits.length >= 2) void scheduler.stop();
+      },
+    });
+
+    await scheduler.start();
+    expect(waits).toHaveLength(2);
+    expect(ran).toBe(2);
+  });
+
   it('caps the catch up at a day by default', () => {
     expect(MAX_CATCH_UP_HOURS).toBe(24);
   });

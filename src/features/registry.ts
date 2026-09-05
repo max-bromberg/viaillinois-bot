@@ -98,6 +98,15 @@ export interface FeatureCommandOption {
 export interface AlternateCommandName {
   name: string;
   description: string;
+  /**
+   * The options this name takes, which are its own rather than the ones the
+   * declared name takes. Two names over one set of rows do not always ask the
+   * same question: reading back the organizations somebody follows takes no
+   * option at all, and a command that offered one would be a box a person can
+   * fill in that changes nothing. A name that leaves this out takes no
+   * options.
+   */
+  options?: readonly FeatureCommandOption[];
 }
 
 export interface FeatureCommand {
@@ -154,7 +163,7 @@ export interface Feature {
  * one command needs one description.
  */
 export const COMMAND_GROUP_DESCRIPTIONS: Record<string, string> = {
-  via: 'Set up VIA in this server and run your organization events.',
+  via: "Set up VIA in this server and run your organization's events.",
   feed: 'Choose what VIA sends you about the organizations you follow.',
   courses: 'Keep the courses VIA reminds you about the exams of.',
 };
@@ -332,8 +341,8 @@ export const features: readonly Feature[] = [
   },
   {
     id: 'mirror.scheduled',
-    description: 'Mirror the events coming up into the server Events tab as Discord scheduled events, so that members can mark themselves interested with Discord own control and receive Discord own reminders.',
-    summary: 'Mirror the events coming up into the server Events tab.',
+    description: "Mirror the events coming up into the server's Events tab as Discord scheduled events, so that members can mark themselves interested with Discord's own control and receive Discord's own reminders.",
+    summary: "Mirror the events coming up into the server's Events tab.",
     category: 'proactive',
     defaultEnabled: false,
     // The Events tab is not a channel, so this feature binds no channel
@@ -368,7 +377,18 @@ export const features: readonly Feature[] = [
         },
       ],
       alternateNames: [
-        { name: 'config', description: 'Change how the bot is set up in this server.' },
+        {
+          name: 'config',
+          description: 'Change how the bot is set up in this server.',
+          options: [
+            {
+              name: 'rso',
+              description: 'Bind this server to one organization, by name.',
+              kind: 'string',
+              autocomplete: true,
+            },
+          ],
+        },
       ],
     },
   },
@@ -412,11 +432,22 @@ export const features: readonly Feature[] = [
       ],
       // The three names are one feature because they are one set of rows:
       // following, unfollowing and reading back what is followed are the same
-      // question asked three ways. The organization is optional on all three
-      // because Discord gives every name the same options, and each of them
-      // has something to say without one.
+      // question asked three ways. Unfollowing names an organization, and
+      // reading back what is followed names nothing, because the answer is the
+      // whole list.
       alternateNames: [
-        { name: 'unfollow', description: 'Stop following an organization.' },
+        {
+          name: 'unfollow',
+          description: 'Stop following an organization.',
+          options: [
+            {
+              name: 'rso',
+              description: 'The organization, by name, or every organization in ECE.',
+              kind: 'string',
+              autocomplete: true,
+            },
+          ],
+        },
         { name: 'following', description: 'See the organizations you follow.' },
       ],
     },
@@ -474,7 +505,10 @@ export const features: readonly Feature[] = [
     summary: 'Post the coming week in the digest channel, once a week.',
     category: 'proactive',
     defaultEnabled: false,
-    requiredPermissions: ['ViewChannel', 'SendMessages'],
+    // A server can ask for each digest to be pinned and the one before it
+    // unpinned, in the timing panel, so this needs the permission to pin as
+    // well as the permission to post.
+    requiredPermissions: ['ViewChannel', 'SendMessages', 'ManageMessages'],
     channelPurposes: ['digest'],
     tier: 'manager',
     contexts: ['guild'],
@@ -554,7 +588,18 @@ export const features: readonly Feature[] = [
         },
       ],
       alternateNames: [
-        { name: 'remove', description: 'Stop hearing about the exams of a course.' },
+        {
+          name: 'remove',
+          description: 'Stop hearing about the exams of a course.',
+          options: [
+            {
+              name: 'course',
+              description: 'The course, by its code or its title.',
+              kind: 'string',
+              autocomplete: true,
+            },
+          ],
+        },
         { name: 'list', description: 'See the courses you added.' },
       ],
     },
@@ -620,7 +665,7 @@ export const features: readonly Feature[] = [
         },
         {
           name: 'to',
-          description: 'The hour the window ends at.',
+          description: 'The hour the window ends at. Leave it out for the end of the day.',
           kind: 'string',
           choices: HOUR_CHOICES,
         },
@@ -697,7 +742,7 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'postpone',
-      description: 'Move one of your organization events to a new time.',
+      description: "Move one of your organization's events to a new time.",
       options: [EVENT_OPTION],
     },
   },
@@ -713,7 +758,7 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'cancel',
-      description: 'Cancel one of your organization events.',
+      description: "Cancel one of your organization's events.",
       options: [EVENT_OPTION],
     },
   },
@@ -729,7 +774,7 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'describe',
-      description: 'Change what one of your organization events says.',
+      description: "Change what one of your organization's events says.",
       options: [EVENT_OPTION],
     },
   },
@@ -745,13 +790,13 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'visibility',
-      description: 'Switch one of your organization events between public and internal.',
+      description: "Switch one of your organization's events between public and internal.",
       options: [EVENT_OPTION],
     },
   },
   {
     id: 'admin.repost',
-    description: 'Let an editor of an organization post the announcement card of one of its events again, in the announcements channel or in the channel the command was run in.',
+    description: 'Let an editor of an organization post the announcement card of one of its events again, in the channel this server bound to announcements.',
     summary: 'Post the announcement card of one event again.',
     category: 'administration',
     defaultEnabled: true,
@@ -763,7 +808,7 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'repost',
-      description: 'Post the announcement of one of your organization events again.',
+      description: "Post the announcement of one of your organization's events again.",
       options: [EVENT_OPTION],
     },
   },
@@ -779,7 +824,7 @@ export const features: readonly Feature[] = [
     contexts: ['guild'],
     command: {
       name: 'note',
-      description: 'Pin a short note about where one of your organization events is.',
+      description: "Pin a short note about where one of your organization's events is.",
       options: [EVENT_OPTION],
     },
   },

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createScheduledEventMirror } from '../../src/mirror/scheduledEvents.ts';
+import {
+  createScheduledEventMirror, MAX_SCHEDULED_EVENT_FIELD,
+} from '../../src/mirror/scheduledEvents.ts';
 import { createFeatureDisabler } from '../../src/guilds/disable.ts';
 import { createFakeViaClient } from '../../src/via/fake.ts';
 import { memoryGuildStore } from '../commands/support.ts';
@@ -187,6 +189,60 @@ describe('mirroring one event into the Events tab', () => {
     expect(actions.done.map(one => one.action))
       .toEqual(['createScheduledEvent', 'deleteScheduledEvent']);
   });
+
+  /**
+   * A delivery row that was written and never posted says the scheduled event
+   * is still owed. Discord refusing once must not cost the server the entry
+   * for good, so the same entry handled again creates it.
+   */
+  it('creates a scheduled event that was owed when the entry is handled again', async () => {
+    const { mirror, installation, actions, mirrors } = await built();
+    actions.failNextWith(new Error('Discord did not answer.'));
+    await expect(mirror.apply(installation, event(), 1)).rejects.toThrow('Discord did not answer.');
+    expect(await mirrors.get(GUILD, 10)).toBe(null);
+
+    await mirror.apply(installation, event(), 1);
+    expect(actions.done.filter(one => one.action === 'createScheduledEvent')).toHaveLength(1);
+    expect((await mirrors.get(GUILD, 10))!.scheduledEventId).not.toBe(null);
+  });
+});
+
+/**
+ * What Discord will take in a scheduled event.
+ *
+ * Discord refuses a scheduled event whose name or location is longer than a
+ * hundred characters, and the title and the place come from VIA, which bounds
+ * neither at a hundred. A refusal here is an event missing from the tab with
+ * nothing in the channel to say why, so both are cut to what Discord takes.
+ */
+describe('what a scheduled event carries', () => {
+  it('cuts a title longer than Discord will take', async () => {
+    const { mirror, installation, actions } = await built();
+    await mirror.apply(installation, event({ title: 'A'.repeat(140) }), 1);
+
+    const draft = actions.done[0]!.draft!;
+    expect(draft.name).toHaveLength(MAX_SCHEDULED_EVENT_FIELD);
+    expect(draft.name.startsWith('A'.repeat(50))).toBe(true);
+  });
+
+  it('cuts a place longer than Discord will take', async () => {
+    const { mirror, installation, actions } = await built();
+    await mirror.apply(installation, event({
+      building: null,
+      roomNumber: null,
+      locationText: 'B'.repeat(140),
+    }), 1);
+
+    expect(actions.done[0]!.draft!.location).toHaveLength(MAX_SCHEDULED_EVENT_FIELD);
+  });
+
+  it('leaves a title and a place that already fit exactly as they are', async () => {
+    const { mirror, installation, actions } = await built();
+    await mirror.apply(installation, event(), 1);
+
+    expect(actions.done[0]!.draft!.name).toBe('General meeting');
+    expect(actions.done[0]!.draft!.location).toBe('Electrical & Computer Eng Bldg 1002');
+  });
 });
 
 describe('the edge of the mirroring window', () => {
@@ -262,6 +318,30 @@ describe('rolling the window forward over a series', () => {
     await guilds.setFeatureEnabled(GUILD, 'mirror.scheduled', false);
     await mirror.rollGuild(installation);
     expect(actions.done).toEqual([]);
+  });
+
+  /**
+   * A roll belongs to no outbox entry, so a delivery row keyed by one would
+   * be the same row for every roll the server ever makes. The row that says
+   * whether an event is in the tab is the Event_Mirrors row, which is why the
+   * roll asks that rather than Deliveries, and why an occurrence whose
+   * scheduled event has gone is made again on the next roll.
+   */
+  it('creates the scheduled event again after the one it made was deleted', async () => {
+    const { mirror, installation, actions, mirrors } = await withSeries();
+    await mirror.rollGuild(installation);
+    await mirror.remove(installation, 10);
+    expect((await mirrors.get(GUILD, 10))!.scheduledEventId).toBe(null);
+
+    await mirror.rollGuild(installation);
+    expect(actions.done.filter(one => one.action === 'createScheduledEvent')).toHaveLength(3);
+    expect((await mirrors.get(GUILD, 10))!.scheduledEventId).not.toBe(null);
+  });
+
+  it('writes no delivery row for the occurrences a roll creates', async () => {
+    const { mirror, installation, deliveries } = await withSeries();
+    await mirror.rollGuild(installation);
+    expect(deliveries.rows()).toEqual([]);
   });
 });
 

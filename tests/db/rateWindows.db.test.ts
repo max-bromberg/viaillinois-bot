@@ -8,6 +8,7 @@ let applyMigrations: typeof import('../../src/db/migrate.ts').applyMigrations;
 let createRateWindows: typeof import('../../src/ratelimit/windows.ts').createRateWindows;
 let userSubject: typeof import('../../src/ratelimit/windows.ts').userSubject;
 let guildSubject: typeof import('../../src/ratelimit/windows.ts').guildSubject;
+let autocompleteSubject: typeof import('../../src/ratelimit/windows.ts').autocompleteSubject;
 
 /**
  * The rate windows are a claim about arithmetic over rows: what the count in
@@ -25,7 +26,9 @@ describe('Rate_Windows', () => {
     ({ db, pool } = await import('../../src/db/client.ts'));
     ({ rateWindows } = await import('../../src/db/schema.ts'));
     ({ applyMigrations } = await import('../../src/db/migrate.ts'));
-    ({ createRateWindows, userSubject, guildSubject } = await import('../../src/ratelimit/windows.ts'));
+    ({
+      createRateWindows, userSubject, guildSubject, autocompleteSubject,
+    } = await import('../../src/ratelimit/windows.ts'));
   }, 180_000);
 
   beforeEach(async () => {
@@ -39,7 +42,9 @@ describe('Rate_Windows', () => {
   const windows = () => createRateWindows({
     db,
     now,
-    limits: { unlinkedPerHour: 3, linkedPerHour: 5, guildPerHour: 8 },
+    limits: {
+      unlinkedPerHour: 3, linkedPerHour: 5, guildPerHour: 8, autocompletePerMinute: 4,
+    },
   });
 
   // Written out rather than built with userSubject, because the module is
@@ -138,7 +143,9 @@ describe('Rate_Windows', () => {
     const limiter = createRateWindows({
       db,
       now,
-      limits: { unlinkedPerHour: 3, linkedPerHour: 5, guildPerHour: 8 },
+      limits: {
+        unlinkedPerHour: 3, linkedPerHour: 5, guildPerHour: 8, autocompletePerMinute: 4,
+      },
       keepMinutes: 120,
     });
     await limiter.consume(rosa, 'linked');
@@ -178,5 +185,42 @@ describe('Rate_Windows', () => {
   it('names a subject by the kind of thing it is', () => {
     expect(userSubject('204255221017214977')).toBe('user:204255221017214977');
     expect(guildSubject('900000000000000001')).toBe('guild:900000000000000001');
+    expect(autocompleteSubject('204255221017214977'))
+      .toBe('autocomplete:204255221017214977');
+  });
+
+  /**
+   * An autocomplete fires on every keystroke, so its window is a minute
+   * rather than an hour and its own subject rather than the one the commands
+   * are counted against. A person typing a name never reaches it, and a
+   * script that fires it in a loop is stopped inside a minute.
+   */
+  describe('the window an autocomplete is counted against', () => {
+    const typing = 'autocomplete:204255221017214977';
+
+    it('allows a burst up to the limit and refuses the one past it', async () => {
+      const limiter = windows();
+      for (let i = 0; i < 4; i++) {
+        expect((await limiter.consume(typing, 'autocomplete')).allowed).toBe(true);
+      }
+      const refused = await limiter.consume(typing, 'autocomplete');
+      expect(refused.allowed).toBe(false);
+      expect(refused.limit).toBe(4);
+    });
+
+    it('is a minute long rather than an hour, so typing again a minute later is allowed', async () => {
+      const limiter = windows();
+      for (let i = 0; i < 4; i++) await limiter.consume(typing, 'autocomplete');
+      expect((await limiter.consume(typing, 'autocomplete')).allowed).toBe(false);
+
+      clock = new Date('2026-09-05T14:31:20Z');
+      expect((await limiter.consume(typing, 'autocomplete')).allowed).toBe(true);
+    });
+
+    it('leaves the command window alone, because it is a subject of its own', async () => {
+      const limiter = windows();
+      for (let i = 0; i < 8; i++) await limiter.consume(typing, 'autocomplete');
+      expect((await limiter.consume(rosa, 'unlinked')).allowed).toBe(true);
+    });
   });
 });

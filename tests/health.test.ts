@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { startHealthServer, type HealthProbes, type HealthServer } from '../src/health.ts';
+import {
+  startHealthServer, heldFor, VIA_PROBE_TTL_MS,
+  type HealthProbes, type HealthServer,
+} from '../src/health.ts';
 
 /** Probes that all answer well, for the tests to break one at a time. */
 function healthyProbes(): HealthProbes {
@@ -232,5 +235,76 @@ describe('what the health endpoint says about the housekeeping', () => {
     expect(status).toBe(200);
     expect(body.lastPruneAt).toBe(null);
     expect(body.reconciliationPending).toBe(false);
+  });
+});
+
+/**
+ * The probe that reaches the web platform.
+ *
+ * The health port answers anybody who can reach it, and the cutover polls it
+ * while it waits for the container to come up. Every one of those hits calling
+ * the internal service API would be the bot's own health check adding load to
+ * a web platform that may already be struggling, so the answer is held for a
+ * few seconds and the hits inside that share it.
+ */
+describe('holding the answer the web platform gave', () => {
+  function probe(answers: Array<() => boolean | Promise<boolean>>) {
+    let clock = new Date('2026-09-05T14:30:00Z');
+    let asked = 0;
+    const held = heldFor(
+      async () => {
+        const next = answers[Math.min(asked, answers.length - 1)]!;
+        asked += 1;
+        return next();
+      },
+      { now: () => clock },
+    );
+    return {
+      held,
+      asked: () => asked,
+      advance: (milliseconds: number) => { clock = new Date(clock.getTime() + milliseconds); },
+    };
+  }
+
+  it('holds the answer for the few seconds it names', () => {
+    expect(VIA_PROBE_TTL_MS).toBe(5_000);
+  });
+
+  it('asks the web platform once for every hit inside those seconds', async () => {
+    const { held, asked } = probe([() => true]);
+    expect(await held()).toBe(true);
+    expect(await held()).toBe(true);
+    expect(await held()).toBe(true);
+    expect(asked()).toBe(1);
+  });
+
+  it('asks again once they are over', async () => {
+    const { held, asked, advance } = probe([() => true]);
+    await held();
+    advance(VIA_PROBE_TTL_MS - 1);
+    await held();
+    expect(asked()).toBe(1);
+
+    advance(2);
+    await held();
+    expect(asked()).toBe(2);
+  });
+
+  it('asks once for hits that arrive at the same moment', async () => {
+    const { held, asked } = probe([() => true]);
+    const answers = await Promise.all([held(), held(), held()]);
+    expect(answers).toEqual([true, true, true]);
+    expect(asked()).toBe(1);
+  });
+
+  /**
+   * A web platform that is not answering is the case where the hits matter
+   * most, so a refusal is held as well and reported as a refusal.
+   */
+  it('holds a failure too, rather than asking a web platform that is down on every hit', async () => {
+    const { held, asked } = probe([() => { throw new Error('the web platform did not answer'); }]);
+    await expect(held()).rejects.toThrow('the web platform did not answer');
+    expect(await held()).toBe(false);
+    expect(asked()).toBe(1);
   });
 });

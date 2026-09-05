@@ -417,28 +417,36 @@ export function createGuildStore(db: BotDatabase): GuildStore {
      * and a count taken afterwards would be zero whatever was there. The three
      * dependent tables cascade from the installation row, and they are deleted
      * here as well so that the count and the delete cannot disagree.
+     *
+     * The six deletes are one transaction. A manager who ran the removal
+     * command has been told that the bot no longer holds anything for the
+     * server, and half of it done would be a server that is neither set up nor
+     * removed, which nobody can put right from Discord. Either all six happen
+     * or none of them does.
      */
     async removeGuild(guildId) {
-      const [features, channels, followed, installation] = await Promise.all([
-        db.select().from(guildFeatures).where(eq(guildFeatures.guildId, guildId)),
-        db.select().from(guildChannels).where(eq(guildChannels.guildId, guildId)),
-        db.select().from(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId)),
-        db.select().from(guildInstallations).where(eq(guildInstallations.guildId, guildId)),
-      ]);
+      return db.transaction(async tx => {
+        const [features, channels, followed, installation] = await Promise.all([
+          tx.select().from(guildFeatures).where(eq(guildFeatures.guildId, guildId)),
+          tx.select().from(guildChannels).where(eq(guildChannels.guildId, guildId)),
+          tx.select().from(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId)),
+          tx.select().from(guildInstallations).where(eq(guildInstallations.guildId, guildId)),
+        ]);
 
-      await db.delete(guildFeatures).where(eq(guildFeatures.guildId, guildId));
-      await db.delete(guildChannels).where(eq(guildChannels.guildId, guildId));
-      await db.delete(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId));
-      await db.delete(guildMessages).where(eq(guildMessages.guildId, guildId));
-      await db.delete(guildRoleMappings).where(eq(guildRoleMappings.guildId, guildId));
-      await db.delete(guildInstallations).where(eq(guildInstallations.guildId, guildId));
+        await tx.delete(guildFeatures).where(eq(guildFeatures.guildId, guildId));
+        await tx.delete(guildChannels).where(eq(guildChannels.guildId, guildId));
+        await tx.delete(guildFollowedRsos).where(eq(guildFollowedRsos.guildId, guildId));
+        await tx.delete(guildMessages).where(eq(guildMessages.guildId, guildId));
+        await tx.delete(guildRoleMappings).where(eq(guildRoleMappings.guildId, guildId));
+        await tx.delete(guildInstallations).where(eq(guildInstallations.guildId, guildId));
 
-      return {
-        features: features.length,
-        channels: channels.length,
-        followedRsos: followed.length,
-        installation: installation.length > 0,
-      };
+        return {
+          features: features.length,
+          channels: channels.length,
+          followedRsos: followed.length,
+          installation: installation.length > 0,
+        };
+      });
     },
   };
 }

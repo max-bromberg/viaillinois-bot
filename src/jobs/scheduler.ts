@@ -204,7 +204,16 @@ export function createJobScheduler(options: JobSchedulerOptions): JobScheduler {
 
   async function every(): Promise<void> {
     while (running) {
-      await runDue();
+      try {
+        await runDue();
+      } catch (err) {
+        // Every job is already guarded, so what reaches here is the machinery
+        // around them: a Job_Runs write the database refused, or a clock
+        // reading that failed. A loop that ended because of one of those
+        // would leave the bot sending nothing, and looking from outside
+        // exactly like a bot with nothing to send.
+        console.error('a pass of the scheduler failed:', (err as Error).message);
+      }
       if (!running) break;
       await sleep(tickMs);
     }

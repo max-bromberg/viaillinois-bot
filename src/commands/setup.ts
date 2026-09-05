@@ -4,7 +4,7 @@ import {
 } from '../features/registry.ts';
 import { hasPermission, type Interaction, type Reply, type ReplyRow } from '../discord/adapter.ts';
 import { WEEKDAY_NAMES, describeHour } from '../jobs/clock.ts';
-import { LEAD_CHOICES } from './feed.ts';
+import { LEAD_CHOICES, describeLead } from './feed.ts';
 import { ViaBusyError, ViaError } from '../via/client.ts';
 import type { GuildBinding, GuildInstallation, GuildKind } from '../guilds/store.ts';
 import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
@@ -94,15 +94,6 @@ const CATEGORY_SUMMARIES: Record<FeatureCategory, string> = {
 export const CATEGORY_ORDER: FeatureCategory[] = ['command', 'proactive', 'roles', 'administration'];
 
 /**
- * What Discord will carry: how long a message may be, and how many rows of
- * components one message may hold. The registry grows every increment, and a
- * panel that grows past either of these is a panel nobody can open, so the
- * features panel is one page per category rather than one message.
- */
-export const MAX_MESSAGE_LENGTH = 2000;
-export const MAX_ROWS = 5;
-
-/**
  * Why a feature cannot work here, or null when nothing stops it.
  *
  * Two things stop a feature: a purpose it posts to that no channel is bound
@@ -121,7 +112,9 @@ export function blockedReason(
   const missingPermission = feature.requiredPermissions.find(permission =>
     !state.permissions.includes(permission) && !state.permissions.includes('Administrator'));
   if (missingPermission) {
-    return `the bot does not have the ${permissionName(missingPermission)} permission here`;
+    // The sentence this is spliced into already says where, so the reason
+    // does not say it a second time.
+    return `the bot does not have the ${permissionName(missingPermission)} permission`;
   }
   return null;
 }
@@ -183,7 +176,7 @@ function bindingPanel(state: PanelState, rsoName: string | null): Reply {
       '',
       `This server currently follows ${describeBinding(state.installation, rsoName)}.`,
       '',
-      'Binding a server to one organization needs a VIA account on that organization board, because it is a claim about who this server speaks for. Following all of ECE or a chosen set needs nothing beyond the Manage Server permission.',
+      "Binding a server to one organization needs a VIA account on that organization's board, because it is a claim about who this server speaks for. Following all of ECE or a chosen set needs nothing beyond the Manage Server permission.",
     ].join('\n'),
     components: [
       {
@@ -238,7 +231,13 @@ function rsoMenuPanel(options: {
   const shown = options.rsos.slice(0, MAX_MENU_OPTIONS);
   const lines = [options.heading, '', options.explanation];
   if (options.rsos.length > shown.length) {
-    lines.push('', `Discord shows at most ${MAX_MENU_OPTIONS} organizations in one menu, so the rest are not listed here. Run the setup command with the organization option to reach any of them by name.`);
+    // What to do about a menu that will not hold every organization depends on
+    // which question is being answered. The organization option on the setup
+    // command binds this server to one organization, which is not what
+    // somebody choosing a set of organizations to follow is doing.
+    lines.push('', options.multiple
+      ? `Discord shows at most ${MAX_MENU_OPTIONS} organizations in one menu. Choose from these for now, and run the config command again to add more.`
+      : `Discord shows at most ${MAX_MENU_OPTIONS} organizations in one menu, so the rest are not listed here. Run the setup command with the organization option to reach any of them by name.`);
   }
 
   if (shown.length === 0) {
@@ -368,7 +367,9 @@ export function renderFeatureList(state: FeatureListState): Reply {
   for (const feature of inCategory) {
     const on = state.enabled[feature.id] ?? feature.defaultEnabled;
     const blocked = blockedReason(feature, state);
-    lines.push(`- ${on ? 'on' : 'off'}: ${feature.id}`);
+    // A manager reads what the feature does. The identifier is how the bot
+    // keys its own rows and means nothing to the person choosing.
+    lines.push(`- ${on ? 'on' : 'off'}: ${feature.summary}`);
     if (blocked) lines.push(`  This cannot work here because ${blocked}.`);
   }
 
@@ -399,7 +400,10 @@ export function renderFeatureList(state: FeatureListState): Reply {
         options: inCategory.slice(0, MAX_MENU_OPTIONS).map(feature => {
           const on = state.enabled[feature.id] ?? feature.defaultEnabled;
           return {
-            label: `${on ? 'Switch off' : 'Switch on'}: ${feature.id}`.slice(0, 100),
+            // Discord allows a hundred characters on a label, so a long
+            // summary is cut there and given in full in the description
+            // underneath it.
+            label: `${on ? 'Switch off' : 'Switch on'}: ${feature.summary}`.slice(0, 100),
             value: feature.id,
             description: feature.summary,
           };
@@ -435,7 +439,7 @@ export function timingPanel(state: PanelState): Reply {
     '**Step 5 of 5: when the timed posts happen**',
     '',
     `The weekly digest is posted on ${WEEKDAY_NAMES[installation.digestDay]} at ${describeHour(installation.digestHour)}, on the campus clock.`,
-    `The day of reminders are posted ${installation.reminderLeadMinutes} minutes before each event.`,
+    `The day of reminders are posted ${describeLead(installation.reminderLeadMinutes)} before each event.`,
     `Each digest is ${installation.digestPinned ? 'pinned, and the one before it unpinned' : 'not pinned'}.`,
     '',
     'These matter only for the features that use them, so a server with the weekly digest switched off can leave them as they are.',
@@ -524,7 +528,7 @@ function menuPanel(state: PanelState, rsoName: string | null): Reply {
   }
   lines.push('');
   lines.push(`Weekly digest: ${WEEKDAY_NAMES[state.installation.digestDay]} at ${describeHour(state.installation.digestHour)}, ${state.installation.digestPinned ? 'pinned' : 'not pinned'}`);
-  lines.push(`Day of reminders: ${state.installation.reminderLeadMinutes} minutes before each event`);
+  lines.push(`Day of reminders: ${describeLead(state.installation.reminderLeadMinutes)} before each event`);
 
   return {
     content: lines.join('\n'),
@@ -656,10 +660,8 @@ async function bindToRso(
     boundBy: interaction.userId,
   });
   const state = await readState(interaction, context);
-  return {
-    ...channelsPanel(state, null),
-    content: `This server is now bound to ${rso.name}.\n\n${channelsPanel(state, null).content}`,
-  };
+  const panel = channelsPanel(state, null);
+  return { ...panel, content: `This server is now bound to ${rso.name}.\n\n${panel.content}` };
 }
 
 /** Switch one feature on or off, refusing to switch on one that cannot work. */
@@ -679,15 +681,31 @@ export async function toggleFeature(
     const blocked = blockedReason(feature, state);
     if (blocked) {
       return {
-        content: `${feature.id}, ${feature.summary}\n\nThis cannot be switched on here because ${blocked}. Fix that first and then switch it on.`,
+        content: `${feature.summary}\n\nThis cannot be switched on here because ${blocked}. Fix that first and then switch it on.`,
       };
     }
   }
 
   await context.guilds.setFeatureEnabled(guildId, feature.id, !enabled);
   return {
-    content: `${feature.id}, ${feature.summary}\n\nThis is now ${enabled ? 'off' : 'on'} in this server.`,
+    content: `${feature.summary}\n\nThis is now ${enabled ? 'off' : 'on'} in this server.`,
   };
+}
+
+/**
+ * The answers each menu offers, checked rather than trusted.
+ *
+ * What comes back from a menu is whatever arrived at the gateway, and these
+ * three go straight into columns that have room for nothing else. A value the
+ * menu never offered puts the panel back rather than writing a row nothing can
+ * read afterwards.
+ */
+const GUILD_KINDS: readonly GuildKind[] = ['rso', 'community'];
+const GUILD_BINDINGS: readonly GuildBinding[] = ['rso', 'all', 'set'];
+
+/** The channel purpose a menu or an identifier names, or nothing for anything else. */
+function purposeOf(value: string): ChannelPurpose | null {
+  return CHANNEL_PURPOSES.find(one => one === value) ?? null;
 }
 
 /** Whether the person may run any of this, and the sentence they read when they may not. */
@@ -721,7 +739,14 @@ export const setupCommand: CommandHandler = {
     return panelFor('kind', interaction, context);
   },
 
+  /**
+   * The completion behind the organization option is the same question the
+   * command refuses, asked one keystroke at a time. Somebody who may not run
+   * setup is offered nothing rather than the organization list, and no call is
+   * made to the web platform on their behalf.
+   */
   async autocomplete(interaction: Interaction, context: CommandContext) {
+    if (refuseUnlessManager(interaction)) return [];
     if (interaction.focusedOption?.name !== 'rso') return [];
     const typed = (interaction.focusedOption.value ?? '').trim().toLowerCase();
     const rsos = await context.via.listRsos();
@@ -765,19 +790,27 @@ export const setupComponent: ComponentHandler = {
     const customId = interaction.customId ?? '';
     const chosen = interaction.values[0] ?? '';
 
+    if (customId === REMOVE_BUTTON) return removeEverything(interaction, context);
+
     if (customId.startsWith('setup:step:')) {
       return panelFor(customId.slice('setup:step:'.length) as SetupStep, interaction, context);
     }
 
     if (customId === 'setup:kind') {
       await readState(interaction, context);
-      await context.guilds.setKind(guildId, chosen as GuildKind);
+      // What a menu sends back is whatever arrived, so it is checked against
+      // the answers the menu actually offers rather than trusted into a
+      // column that has no room for anything else.
+      const kind = GUILD_KINDS.find(one => one === chosen);
+      if (!kind) return panelFor('kind', interaction, context);
+      await context.guilds.setKind(guildId, kind);
       return panelFor('binding', interaction, context);
     }
 
     if (customId === 'setup:binding') {
       const state = await readState(interaction, context);
-      const binding = chosen as GuildBinding;
+      const binding = GUILD_BINDINGS.find(one => one === chosen);
+      if (!binding) return panelFor('binding', interaction, context);
 
       if (binding === 'all') {
         await context.guilds.setBinding(guildId, { binding: 'all' });
@@ -805,7 +838,7 @@ export const setupComponent: ComponentHandler = {
 
       return rsoMenuPanel({
         heading: '**Step 2 of 5: which organization does this server speak for?**',
-        explanation: 'Binding a server to an organization needs a VIA account on that organization board, so VIA is asked to confirm it when you choose.',
+        explanation: "Binding a server to an organization needs a VIA account on that organization's board, so VIA is asked to confirm it when you choose.",
         customId: 'setup:bindrso',
         rsos,
         chosen: state.installation.rsoId === null ? [] : [state.installation.rsoId],
@@ -855,11 +888,12 @@ export const setupComponent: ComponentHandler = {
 
     if (customId === 'setup:purpose') {
       const state = await readState(interaction, context);
-      return channelsPanel(state, chosen as ChannelPurpose);
+      return channelsPanel(state, purposeOf(chosen));
     }
 
     if (customId.startsWith('setup:channel:')) {
-      const purpose = customId.slice('setup:channel:'.length) as ChannelPurpose;
+      const purpose = purposeOf(customId.slice('setup:channel:'.length));
+      if (!purpose) return panelFor('channels', interaction, context);
       await readState(interaction, context);
       await context.guilds.bindChannel(guildId, purpose, chosen);
       const state = await readState(interaction, context);
@@ -871,7 +905,8 @@ export const setupComponent: ComponentHandler = {
     }
 
     if (customId.startsWith('setup:unbind:')) {
-      const purpose = customId.slice('setup:unbind:'.length) as ChannelPurpose;
+      const purpose = purposeOf(customId.slice('setup:unbind:'.length));
+      if (!purpose) return panelFor('channels', interaction, context);
       await readState(interaction, context);
       await context.guilds.unbindChannel(guildId, purpose);
       const state = await readState(interaction, context);
@@ -913,6 +948,95 @@ function counted(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+/** The button that actually removes everything, once a manager has read what will go. */
+export const REMOVE_BUTTON = 'setup:removeall';
+
+export const NOTHING_TO_REMOVE_MESSAGE =
+  'The bot has nothing set up in this server, so there was nothing to remove.';
+
+/**
+ * What a manager reads before anything is deleted.
+ *
+ * Removal deletes every scheduled event the bot created in the server, unpins
+ * the message it pinned, and deletes every row it holds for the server, and
+ * none of that can be undone from Discord. So it is asked for twice, and the
+ * first answer says what will go rather than only that something will.
+ */
+export function removalConfirmation(): Reply {
+  return {
+    content: [
+      '**Remove the bot from this server?**',
+      '',
+      'This deletes every scheduled event the bot created here, unpins the message it pinned, and deletes every row it holds for this server: the kind of server it is, the organizations it follows, the channels it posts in, the features that are on, and the roles it was mapped to.',
+      '',
+      'Nothing about the people who used the bot here is deleted, because their links, follows and reminders are theirs rather than this server. None of this can be undone, so setting the bot up again means answering the setup panels again.',
+    ].join('\n'),
+    components: [{
+      kind: 'row',
+      components: [{
+        kind: 'button',
+        style: 'danger',
+        label: 'Remove everything',
+        customId: REMOVE_BUTTON,
+      }],
+    }],
+  };
+}
+
+/**
+ * Remove everything, which is what the confirmation button does.
+ *
+ * The headline says what has actually happened. The bot is still in the
+ * server, because leaving it is Discord's own action and a server manager
+ * takes it from the server settings, and a headline that said the bot had been
+ * removed would leave a manager wondering why it is still in the member list.
+ */
+export async function removeEverything(
+  interaction: Interaction,
+  context: CommandContext,
+): Promise<Reply> {
+  const guildId = interaction.guildId!;
+
+  // Everything the bot posted into the server goes before the rows that say
+  // where it posted them, because the rows are what says where to look.
+  const cleared = context.removeGuildPresence
+    ? await context.removeGuildPresence(guildId)
+    : null;
+
+  const deleted = await context.guilds.removeGuild(guildId);
+
+  // A hook that cleared nothing is the same as no hook at all here: a server
+  // the bot holds no rows for and posted nothing in has nothing to remove,
+  // and saying that it has been removed would be a sentence about nothing.
+  const clearedSomething = cleared !== null
+    && (cleared.scheduledEvents > 0 || cleared.unpinnedMessages > 0);
+
+  if (!deleted.installation && !clearedSomething) {
+    return { content: NOTHING_TO_REMOVE_MESSAGE, components: [] };
+  }
+
+  const parts = [
+    counted(deleted.channels, 'channel binding', 'channel bindings'),
+    counted(deleted.followedRsos, 'organization followed', 'organizations followed'),
+    counted(deleted.features, 'feature setting', 'feature settings'),
+  ];
+  if (cleared) {
+    parts.unshift(counted(cleared.scheduledEvents, 'scheduled event', 'scheduled events'));
+    parts.push(counted(cleared.unpinnedMessages, 'pinned message', 'pinned messages'));
+  }
+
+  return {
+    content: [
+      'The bot no longer posts anything in this server, and every row it held for this server has been deleted. It is still a member of the server, so remove it from the server settings if you want it gone entirely.',
+      '',
+      `Deleted: ${parts.join(', ')}.`,
+      '',
+      'Nothing about the people who used the bot here has been deleted, because their links, follows and reminders are theirs rather than this server. Run setup again at any time to start over.',
+    ].join('\n'),
+    components: [],
+  };
+}
+
 export const removeCommand: CommandHandler = {
   featureId: removeFeature.id,
   name: `via ${removeFeature.command!.name}`,
@@ -922,44 +1046,11 @@ export const removeCommand: CommandHandler = {
     const refusal = refuseUnlessManager(interaction);
     if (refusal) return refusal;
 
-    const guildId = interaction.guildId!;
+    // A server with nothing set up and nothing posted has nothing to confirm,
+    // so it is answered rather than asked.
+    const installation = await context.guilds.getInstallation(interaction.guildId!);
+    if (!installation) return removeEverything(interaction, context);
 
-    // Everything the bot posted into the server goes before the rows that say
-    // where it posted them, because the rows are what says where to look.
-    const cleared = context.removeGuildPresence
-      ? await context.removeGuildPresence(guildId)
-      : null;
-
-    const deleted = await context.guilds.removeGuild(guildId);
-
-    // A hook that cleared nothing is the same as no hook at all here: a server
-    // the bot holds no rows for and posted nothing in has nothing to remove,
-    // and saying that it has been removed would be a sentence about nothing.
-    const clearedSomething = cleared !== null
-      && (cleared.scheduledEvents > 0 || cleared.unpinnedMessages > 0);
-
-    if (!deleted.installation && !clearedSomething) {
-      return { content: 'The bot has nothing set up in this server, so there was nothing to remove.' };
-    }
-
-    const parts = [
-      counted(deleted.channels, 'channel binding', 'channel bindings'),
-      counted(deleted.followedRsos, 'organization followed', 'organizations followed'),
-      counted(deleted.features, 'feature setting', 'feature settings'),
-    ];
-    if (cleared) {
-      parts.unshift(counted(cleared.scheduledEvents, 'scheduled event', 'scheduled events'));
-      parts.push(counted(cleared.unpinnedMessages, 'pinned message', 'pinned messages'));
-    }
-
-    return {
-      content: [
-        'The bot has been removed from this server.',
-        '',
-        `Deleted: ${parts.join(', ')}.`,
-        '',
-        'Nothing about the people who used the bot here has been deleted, because their links, follows and reminders are theirs rather than this server. Invite the bot again and run setup to start over.',
-      ].join('\n'),
-    };
+    return removalConfirmation();
   },
 };

@@ -105,6 +105,43 @@ describe('the feedback request the morning after an event', () => {
     expect(message.content).toContain(FEEDBACK_STOP_SENTENCE);
   });
 
+  /**
+   * An event an organization marked internal is described only to somebody
+   * who may see it, which is the web platform's decision rather than one made
+   * here. So the event is read once for each person about to be asked, and
+   * anybody the read comes back empty for is passed over in silence rather
+   * than sent a message naming a meeting they cannot see.
+   */
+  it('never describes an internal event to somebody who cannot see it', async () => {
+    via.seedLink(ADA, { memberships: [{ rsoId: 3, rsoName: 'IEEE', role: 'member' }] });
+    via.seedLink(GRACE, { memberships: [] });
+    seedYesterday({ isPrivate: true });
+    await marks.mark(10, ADA);
+    await marks.mark(10, GRACE);
+
+    const result = await built().run(MORNING_AFTER);
+
+    expect(delivery.sent.map(one => one.discordUserId)).toEqual([ADA]);
+    expect(result.sent).toBe(1);
+    expect(result.skipped).toBe(1);
+  });
+
+  /**
+   * The message goes to anybody who marked interest or asked to be reminded,
+   * which are two different things, and the date it names is the date the
+   * event ran rather than the date anybody pressed anything. Saying otherwise
+   * tells half the people who receive it something they did not do.
+   */
+  it('says why it is asking without claiming what the person pressed', async () => {
+    seedYesterday();
+    await feed.addReminder(ADA, 10, '2026-09-07 17:00:00');
+
+    await built().run(MORNING_AFTER);
+    const content = delivery.sent[0]!.reply.content;
+    expect(content).toContain('You asked VIA about this event from IEEE, which ran on Mon, Sep 7.');
+    expect(content).not.toContain('You marked interest in this event');
+  });
+
   it('carries the five scores and the way to stop being asked', async () => {
     seedYesterday();
     await marks.mark(10, ADA);

@@ -28,8 +28,9 @@ export { NOT_LINKED_TO_ACT_MESSAGE, notAnEditorMessage } from './shared.ts';
  * changed on the web platform reaches Discord the moment it deploys.
  *
  * Re posting is the one action that changes nothing on VIA, and it is also the
- * one the web platform has no endpoint to be asked about. It is described
- * where it is implemented, below.
+ * one the web platform has no endpoint to be asked about. It is also the one
+ * that asks something of the server as well as of the person, because it posts
+ * a message. Both are described where it is implemented, below.
  */
 
 const postponeFeature = featureById('admin.postpone');
@@ -51,7 +52,7 @@ export const TIME_NOT_READ_MESSAGE =
   'Please write each time as YYYY-MM-DD HH:MM, such as 2026-09-17 18:00, so that VIA reads the same moment you meant.';
 
 export const GUILD_ONLY_MESSAGE =
-  'This acts on one of your organization events in a server, so it has to be run inside a server.';
+  "This acts on one of your organization's events in a server, so it has to be run inside a server.";
 
 /**
  * The identifiers the administrative buttons carry. Every one of them ends in
@@ -335,8 +336,18 @@ async function pinNote(
 }
 
 /**
- * Post the announcement card again, in the announcements channel when the
- * server bound one and in the channel the person is in when it did not.
+ * Post the announcement card again, in the channel this server bound to
+ * announcements.
+ *
+ * Two things are asked of the server before anything is posted, and neither is
+ * about the person. The server has to be one that follows the organization the
+ * event belongs to, because an announcement of an organization's event in a
+ * server that never asked to hear about that organization is the bot posting
+ * where it was not invited. And the channel has to be the one the server bound
+ * to announcements, because that is where the server said its announcements
+ * go: posting into whichever channel the command happened to be run in would
+ * let one editor put an announcement in any channel of any server the bot is
+ * in, which is a server manager's decision rather than an editor's.
  *
  * The new announcement is written down as the server's announcement for that
  * event, so a later change edits the message people are actually reading
@@ -355,9 +366,14 @@ async function repost(
   if (!interaction.guildId) return { content: GUILD_ONLY_MESSAGE };
   if (!context.postMessage) return { content: NOTHING_TO_POST_WITH_MESSAGE };
 
+  const following = await context.guilds.listGuildsFollowing(event.rsoId);
+  if (!following.some(installation => installation.guildId === interaction.guildId)) {
+    return { content: NOT_FOLLOWED_HERE_MESSAGE };
+  }
+
   const channels = await context.guilds.listChannels(interaction.guildId);
-  const channelId = channels.announcements ?? interaction.channelId;
-  if (!channelId) return { content: NOTHING_TO_POST_WITH_MESSAGE };
+  const channelId = channels.announcements;
+  if (!channelId) return { content: NO_ANNOUNCEMENTS_CHANNEL_MESSAGE };
 
   const card = renderEventCard(event, { websiteUrl: context.websiteUrl, manageable: true });
   const messageId = await context.postMessage(channelId, card);
@@ -368,6 +384,12 @@ async function repost(
 
 export const NOTHING_TO_POST_WITH_MESSAGE =
   'The bot cannot post in this server right now, so the announcement has not been posted again. Please try again in a few minutes.';
+
+export const NOT_FOLLOWED_HERE_MESSAGE =
+  'This server does not follow the organization that event belongs to, so its announcements do not go here.';
+
+export const NO_ANNOUNCEMENTS_CHANNEL_MESSAGE =
+  'This server has no channel bound to announcements, so a server manager has to bind one with the config command before an announcement can be posted here again.';
 
 /** The card, for a linked person, which is what the manage button opens. */
 async function manage(

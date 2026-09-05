@@ -1,6 +1,7 @@
 import { NO_OUTBOX_ENTRY, channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { createSpread, type SpreadOptions } from '../delivery/spread.ts';
 import { channelFor, noChannelReason } from '../guilds/channels.ts';
-import { followedEvents } from '../announce/followedEvents.ts';
+import { followedEvents, WEEK_LISTING_LIMIT } from '../announce/followedEvents.ts';
 import { campusDatePlus } from '../render/campusTime.ts';
 import { renderGuildDigest } from '../render/digest.ts';
 import { isMissingAccess, isMissingMessage, type DiscordActions } from '../discord/adapter.ts';
@@ -34,7 +35,7 @@ export function guildDigestPurpose(day: string): string {
   return `digest:${day}`;
 }
 
-export interface GuildDigestJobOptions {
+export interface GuildDigestJobOptions extends SpreadOptions {
   guilds: GuildStore;
   deliveries: Deliveries;
   actions: DiscordActions;
@@ -57,6 +58,12 @@ export interface GuildDigestJob {
 
 export function createGuildDigestJob(options: GuildDigestJobOptions): GuildDigestJob {
   const { guilds, deliveries, actions, via, disable } = options;
+  /**
+   * The pause between one server and the next, from section 9 of the design:
+   * the proactive jobs spread their posts rather than firing every server's
+   * in the same second.
+   */
+  const spread = createSpread(options);
 
   /**
    * Pin the digest just posted and unpin the one before it. A pin that fails
@@ -93,9 +100,10 @@ export function createGuildDigestJob(options: GuildDigestJobOptions): GuildDiges
       const result: GuildDigestResult = { posted: 0, skipped: 0, failed: 0 };
       const due = await guilds.listInstallationsForDigest(hour.dayOfWeek, hour.hour);
 
-      for (const installation of due) {
+      for (const [index, installation] of due.entries()) {
         const guildId = installation.guildId;
         try {
+          await spread(index);
           const channelId = await channelFor({ guilds, disable }, guildId, DIGEST_FEATURE, 'digest');
           if (!channelId) continue;
 
@@ -105,7 +113,10 @@ export function createGuildDigestJob(options: GuildDigestJobOptions): GuildDiges
             purpose: guildDigestPurpose(hour.day),
             kind: 'message',
           });
-          if (!intended.isNew) {
+          // A row that carries the moment it was posted is a digest that
+          // has been posted, and a row that carries none is one that is still
+          // owed.
+          if (!intended.isNew && intended.deliveredAt !== null) {
             result.skipped += 1;
             continue;
           }
@@ -113,6 +124,7 @@ export function createGuildDigestJob(options: GuildDigestJobOptions): GuildDiges
           const events = await followedEvents({ guilds, via }, installation, {
             from: hour.day,
             to: campusDatePlus(DIGEST_DAYS, hour.at),
+            limit: WEEK_LISTING_LIMIT,
           });
 
           let messageId: string;
@@ -124,7 +136,9 @@ export function createGuildDigestJob(options: GuildDigestJobOptions): GuildDiges
           } catch (err) {
             if (!isMissingAccess(err)) throw err;
             // The channel the server bound has been deleted or closed to the
-            // bot, which is the same fault as unbinding it.
+            // bot, which is the same fault as unbinding it. The intention
+            // goes with the feature, because there is nowhere left to post.
+            await deliveries.abandon(intended.deliveryId);
             await disable.disable(guildId, DIGEST_FEATURE, noChannelReason('digest'));
             continue;
           }

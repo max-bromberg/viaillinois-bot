@@ -31,12 +31,14 @@ The token is shown once, and resetting it is how you get another.
 **The identifiers.** The application's identifier goes into `DISCORD_APPLICATION_ID` and
 its public key into `DISCORD_PUBLIC_KEY`. Both are on the application's general page.
 
-**The intents to leave off.** Under the bot's settings, leave Message Content Intent and
-Presence Intent switched off. The bot never asks the gateway for either, and a development
-application with them switched on would let a change that started asking for one pass
-unnoticed. Server Members Intent is on, because the membership roles are assigned from it.
-The four intents the bot does ask for are named in `src/discord/intents.ts`, and a test
-reads the bitfield they produce.
+**The intents to leave off.** Under the bot's settings, leave all three privileged intents
+switched off: Message Content Intent, Presence Intent and Server Members Intent. The bot
+never asks the gateway for any of them, and a development application with one switched on
+would let a change that started asking for it pass unnoticed. The two intents the bot does
+ask for, which are Guilds and Guild Scheduled Events, are named in
+`src/discord/intents.ts`, and a test reads the bitfield they produce. A mapped role is
+given and taken back through the REST calls rather than read from the members intent, and
+the daily reconciliation reads who is a member of an organization from VIA.
 
 **The installation contexts.** Under Installation, tick both the guild install and the
 user install contexts. The bot registers each command with the contexts its feature

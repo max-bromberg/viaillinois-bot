@@ -3,7 +3,7 @@ import {
   followCommand, unfollowCommand, followingCommand, calendarCommand,
   feedSettingsCommand, feedRemindersCommand, feedComponent,
   ALL_ORGANIZATIONS, FOLLOW_NOTHING_NAMED_MESSAGE, NOTHING_FOLLOWED_MESSAGE,
-  NO_REMINDERS_MESSAGE, calendarAnswer,
+  NO_REMINDERS_MESSAGE, calendarAnswer, describeLead, LEAD_CHOICES, FORGET_REMINDER,
 } from '../../src/commands/feed.ts';
 import { rsoComponent, eventComponent, LINK_NEEDED_MESSAGE } from '../../src/commands/events.ts';
 import { RSO_BUTTON, EVENT_BUTTON } from '../../src/render/eventCard.ts';
@@ -231,7 +231,7 @@ describe('the personal feed', () => {
 
       expect(reply.content).toContain('Sunday');
       expect(reply.content).toContain('6 in the evening');
-      expect(reply.content).toContain('60 minutes');
+      expect(reply.content).toContain('an hour before an event');
       expect(reply.components!.length).toBeGreaterThan(0);
     });
 
@@ -346,6 +346,52 @@ describe('the personal feed', () => {
       const reply = await feedRemindersCommand.run(asAda({ commandName: 'feed reminders' }), ctx.context);
       expect(reply.content).toContain(NO_REMINDERS_MESSAGE);
     });
+
+    /**
+     * The list is where a person goes to take a reminder back, and telling
+     * them to find the event and press a button on it is telling them to do
+     * the bot's work. Each row carries the button that removes it.
+     */
+    it('carries a button that removes each reminder it lists', async () => {
+      ctx.via.seedLink(ADA);
+      ctx.via.seedEvent({
+        eventId: 11,
+        rsoId: 3,
+        rsoName: 'IEEE',
+        title: 'Tutoring',
+        startTime: '2026-09-11T18:00:00-05:00',
+        endTime: '2026-09-11T19:00:00-05:00',
+      });
+      await ctx.feed.addReminder(ADA, 10, '2026-09-10 17:00:00');
+      await ctx.feed.addReminder(ADA, 11, '2026-09-11 17:00:00');
+
+      const reply = await feedRemindersCommand.run(asAda({ commandName: 'feed reminders' }), ctx.context);
+      const buttons = (reply.components ?? []).flatMap(row => row.components);
+      expect(buttons.map(one => (one.kind === 'button' ? one.label : '')))
+        .toEqual(['Remove 1', 'Remove 2']);
+      expect(reply.content).toContain('1. ');
+      expect(reply.content).toContain('2. ');
+    });
+
+    it('removes the reminder the button names, and lists what is left', async () => {
+      ctx.via.seedLink(ADA);
+      await ctx.feed.addReminder(ADA, 10, '2026-09-10 17:00:00');
+
+      const reply = await feedComponent.run(
+        interaction({ kind: 'button', userId: ADA, commandName: null, customId: FORGET_REMINDER(10) }),
+        ctx.context,
+      );
+      expect(await ctx.feed.listReminders(ADA)).toEqual([]);
+      expect(reply.content).toContain(NO_REMINDERS_MESSAGE);
+    });
+
+    it('says nothing about pressing Remind me again, because the button is here', async () => {
+      ctx.via.seedLink(ADA);
+      await ctx.feed.addReminder(ADA, 10, '2026-09-10 17:00:00');
+
+      const reply = await feedRemindersCommand.run(asAda({ commandName: 'feed reminders' }), ctx.context);
+      expect(reply.content).not.toContain('Press Remind me on any of them again');
+    });
   });
 
   describe('the personal calendar', () => {
@@ -376,5 +422,31 @@ describe('the personal feed', () => {
       expect(content).toContain('https://viaillinois.com/calendar/personal/abc.ics');
       expect(content).toContain('private');
     });
+  });
+});
+
+/**
+ * How long a lead time is, in the words the menu offers it in. A person who
+ * chose "A day before" from the menu should read "a day" back, not the number
+ * of minutes the bot happens to store it as.
+ */
+describe('how a lead time reads', () => {
+  it('reads it back in the words the menu offered it in', () => {
+    expect(describeLead(1440)).toBe('a day');
+    expect(describeLead(60)).toBe('an hour');
+    expect(describeLead(120)).toBe('two hours');
+    expect(describeLead(15)).toBe('15 minutes');
+  });
+
+  it('falls back to hours for a lead time the menu does not offer', () => {
+    expect(describeLead(180)).toBe('3 hours');
+    expect(describeLead(45)).toBe('45 minutes');
+  });
+
+  it('offers every choice the menu carries in the menu own words', () => {
+    for (const choice of LEAD_CHOICES) {
+      expect(`${describeLead(choice.minutes)} before`.toLowerCase())
+        .toBe(choice.label.toLowerCase());
+    }
   });
 });

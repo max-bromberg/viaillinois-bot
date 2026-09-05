@@ -67,7 +67,7 @@ export function createFeatureDisabler(options: FeatureDisablerOptions): FeatureD
         purpose: `disabled:${featureId}`,
         kind: 'direct_message',
       });
-      if (!intended.isNew) return;
+      if (!intended.isNew && intended.deliveredAt !== null) return;
 
       console.log(`feature ${featureId} switched off in server ${guildId}: ${reason}`);
       await sendDirectMessage(installation.installedBy, disabledNotice(feature.description, reason));

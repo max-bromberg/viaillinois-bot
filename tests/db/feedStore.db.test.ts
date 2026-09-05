@@ -186,6 +186,20 @@ describe('the personal feed', () => {
       expect(await store().removeReminderFor(ADA, 10)).toBe(true);
       expect(await store().removeReminderFor(ADA, 10)).toBe(false);
     });
+
+    /**
+     * A cancellation asks who was waiting to be reminded of that one event,
+     * so that each of them is told and their reminder taken away.
+     */
+    it('answers with everybody holding a reminder for one event', async () => {
+      await store().addReminder(ADA, 10, '2026-09-05 08:00:00');
+      await store().addReminder(GRACE, 10, '2026-09-05 07:00:00');
+      await store().addReminder(GRACE, 12, '2026-09-30 09:00:00');
+
+      const held = await store().remindersForEvent(10);
+      expect(held.map(row => row.discordUserId)).toEqual([ADA, GRACE]);
+      expect(await store().remindersForEvent(99)).toEqual([]);
+    });
   });
 
   /**

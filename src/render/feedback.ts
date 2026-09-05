@@ -63,7 +63,9 @@ export function renderFeedbackRequest(event: ViaEvent): Reply {
     content: [
       `**How was ${event.title}?**`,
       '',
-      `You marked interest in this event${organization} on ${campusDate(event.startTime)}. Choose a score from 1, which is poor, to 5, which is excellent. The board reads the average and the comments, and never who gave which score.`,
+      `You asked VIA about this event${organization}, which ran on ${campusDate(event.startTime)}.`,
+      '',
+      'Choose a score from 1, which is poor, to 5, which is excellent. The board reads the average and the comments, and never who gave which score.',
       '',
       FEEDBACK_STOP_SENTENCE,
     ].join('\n'),

@@ -46,8 +46,30 @@ describe('building the application commands from the registry', () => {
     expect(group.options!.map(o => o.name)).toEqual(['add', 'remove', 'list']);
     for (const option of group.options!) {
       expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
-      expect(option.options!.map(one => one.name)).toEqual(['course']);
     }
+    expect(group.options![0]!.options!.map(one => one.name)).toEqual(['course']);
+    expect(group.options![1]!.options!.map(one => one.name)).toEqual(['course']);
+  });
+
+  /**
+   * A second name for a feature is a second command over the same rows, and
+   * the two do not always take the same options. Reading back the courses
+   * somebody added takes none at all, and a command that offered one would be
+   * a box a person can fill in that changes nothing.
+   */
+  it('gives a name that takes no options none, rather than the ones its feature takes', () => {
+    const group = buildCommands(features).find(c => c.name === 'courses')!;
+    const list = group.options!.find(o => o.name === 'list')!;
+    expect(list.options ?? []).toEqual([]);
+
+    const following = buildCommands(features).find(c => c.name === 'following')!;
+    expect(following.options ?? []).toEqual([]);
+  });
+
+  it('gives a name that takes its own options exactly those', () => {
+    const unfollow = buildCommands(features).find(c => c.name === 'unfollow')!;
+    expect(unfollow.options!.map(o => o.name)).toEqual(['rso']);
+    expect(unfollow.options![0]!.autocomplete).toBe(true);
   });
 
   it('gives the via group the setup subcommands and the board subcommands', () => {

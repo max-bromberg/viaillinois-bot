@@ -203,3 +203,53 @@ be turned into a Discord account at all. Those people are skipped, with a line i
 and the daily reconciliation puts them right once they have used the bot and the in memory
 directory has learned who they are.
 
+## 2026-09-05: User installation is a set of contexts, not a feature of its own
+
+Section 6.8 of the design names user installation as `install.user`, which reads as another
+row in the feature registry. It is not one, and it should not become one. What user
+installation actually is, in the code, is two declarations made per feature: the contexts a
+feature may be used in, which every feature already declares, and the integration types the
+command list is built with, which follow from the tier. A registry entry called
+`install.user` would be a feature a server manager could switch off, and switching it off
+would mean nothing, because a person using the bot through their own installation in a
+server that never invited it is not a person that server has any say over.
+
+## 2026-09-05: An announcement posted again goes to the bound channel and nowhere else
+
+Section 6.7 of the design offers re-posting "in the announcements channel, or in the
+channel the command was run in". The second half of that is a hole: it lets an editor of
+one organization put an announcement into any channel of any server the bot is in, which is
+a server manager's decision rather than an editor's. Re-posting now asks two things of the
+server before it posts, and refuses in one sentence when either fails: the server has to be
+one that follows the organization the event belongs to, and the announcement goes to the
+channel that server bound to announcements.
+
+## 2026-09-05: The bot asks for two gateway intents, and neither is privileged
+
+The bot asked for four: guilds, guild scheduled events, guild members and direct messages.
+Two of those were never read. A mapped role is given and taken back through the REST calls,
+which answer for themselves, and the daily reconciliation reads who is a member of an
+organization from VIA rather than from Discord, so the members intent, which is privileged
+and has to be justified in a review, bought nothing. Direct messages sent to the bot are
+never read either: everything a person says to it arrives inside an interaction they
+deliberately started, which Discord delivers whatever intents the bot holds.
+
+## 2026-09-05: The reading commands answer the channel, and everything else answers the person
+
+A student who asks what is coming up in a server that invited the bot is asking a question
+the channel around them has too, and an answer only they can see is a question the next
+person asks again. So the seven reading commands answer the channel in a server that
+installed the bot, and answer only the person everywhere else, which is what section 6.8
+requires of a server that did not invite it. Everything else stays between the bot and the
+person: a reminder, a follow, a setting, a board action and a setup panel are one person's
+business wherever they are run.
+
+## 2026-09-05: A server's feature switches are enforced by the dispatcher
+
+Section 5 of the design gives every server a switch for every feature, and until now the
+switches did nothing at all for the commands and the administrative actions: Discord has no
+per server view of a global command, so the command was still offered and still answered.
+The switch is now read when the interaction arrives, and a feature a server switched off is
+refused with one sentence naming the command that puts it back. Setting the bot up and
+removing it are never refused that way, because a switch that could stop either would leave
+a server with no way to switch anything back on.

@@ -6,14 +6,15 @@ import { findViolations } from '../../scripts/check-language.js';
 import {
   setupCommand, configCommand, removeCommand, setupComponent,
   NOT_A_MANAGER_MESSAGE, GUILD_ONLY_MESSAGE, NOT_LINKED_TO_BIND_MESSAGE,
-  blockedReason, renderFeatureList, toggleFeature, CATEGORY_ORDER,
-  MAX_MESSAGE_LENGTH, MAX_ROWS,
+  blockedReason, renderFeatureList, toggleFeature, CATEGORY_ORDER, REMOVE_BUTTON,
 } from '../../src/commands/setup.ts';
+import { MAX_MESSAGE_LENGTH, MAX_MESSAGE_ROWS } from '../../src/discord/adapter.ts';
 import {
   featureById, features, MAX_SELECT_OPTIONS, type Feature,
 } from '../../src/features/registry.ts';
 import type { Interaction, Reply, ReplySelect } from '../../src/discord/adapter.ts';
-import { interaction, testContext } from './support.ts';
+import { interaction, testContext, type TestContext } from './support.ts';
+import type { CommandContext } from '../../src/commands/types.ts';
 
 /**
  * Setup and configuration.
@@ -111,6 +112,49 @@ describe('who may reach the setup panels', () => {
     const { context, guilds } = testContext();
     await setupCommand.run(manager(), context);
     expect(await guilds.getInstallation(GUILD)).not.toBeNull();
+  });
+
+  /**
+   * The completion behind the organization option is the same question the
+   * command refuses, asked one keystroke at a time. Answering it for anybody
+   * would let a person with no permission read the organization list and one
+   * call to the web platform per keystroke out of a bot they cannot use.
+   */
+  it('completes the organization option for a manager', async () => {
+    const { context } = testContext();
+    const choices = await setupCommand.autocomplete!(
+      manager({ kind: 'autocomplete', focusedOption: { name: 'rso', value: '' } }),
+      context,
+    );
+    expect(choices.length).toBeGreaterThan(0);
+  });
+
+  it('completes nothing for somebody without the Manage Server permission', async () => {
+    const { context, via } = testContext();
+    const choices = await setupCommand.autocomplete!(
+      manager({
+        kind: 'autocomplete',
+        memberPermissions: [],
+        focusedOption: { name: 'rso', value: '' },
+      }),
+      context,
+    );
+    expect(choices).toEqual([]);
+    expect(via.calls.filter(call => call === 'listRsos')).toEqual([]);
+  });
+
+  it('completes nothing outside a server, where there is nothing to bind', async () => {
+    const { context } = testContext();
+    const choices = await setupCommand.autocomplete!(
+      manager({
+        kind: 'autocomplete',
+        guildId: null,
+        context: 'botDm',
+        focusedOption: { name: 'rso', value: '' },
+      }),
+      context,
+    );
+    expect(choices).toEqual([]);
   });
 });
 
@@ -230,7 +274,7 @@ describe('the panels, in the order setup walks through them', () => {
     expect(reply.content).toContain('Step 5 of 5');
     expect(reply.content).toContain('Sunday');
     expect(reply.content).toContain('6 in the evening');
-    expect(reply.content).toContain('60 minutes');
+    expect(reply.content).toContain('an hour before each event');
     expect(reply.content).toContain('not pinned');
   });
 
@@ -273,11 +317,99 @@ describe('the panels, in the order setup walks through them', () => {
     expect(reply.content).toContain('Step 4 of 5');
     expect(reply.content).toContain('Commands');
     for (const feature of features.filter(f => f.category === 'command')) {
-      expect(reply.content).toContain(feature.id);
+      expect(reply.content).toContain(feature.summary);
     }
     for (const feature of features.filter(f => f.category === 'proactive')) {
+      expect(reply.content).not.toContain(feature.summary);
+    }
+  });
+
+  /**
+   * A server manager is not reading the registry. The identifiers are how the
+   * bot keys its own rows and mean nothing to the person choosing what the bot
+   * does in their server, so every panel says what a feature does instead.
+   */
+  it('says what each feature does rather than the identifier the bot keys it by', async () => {
+    const { context } = await started();
+    const reply = await setupComponent.run(press('setup:step:features'), context);
+
+    for (const feature of features.filter(f => f.category === 'command')) {
       expect(reply.content).not.toContain(feature.id);
     }
+    const menu = selectIn(reply, 'setup:feature')!;
+    for (const option of menu.options ?? []) {
+      expect(option.label).not.toContain(option.value);
+    }
+  });
+
+  it('says what a feature does when it is switched, rather than the identifier', async () => {
+    const { context, guilds } = await started();
+    await guilds.setFeatureEnabled(GUILD, 'events.list', true);
+    const reply = await setupComponent.run(choose('setup:feature', ['events.list']), context);
+
+    expect(reply.content).toContain(featureById('events.list').summary);
+    expect(reply.content).not.toContain('events.list');
+  });
+
+  /**
+   * Discord shows twenty five options in a menu and VIA has more
+   * organizations than that. What a manager does about it depends on which
+   * question they are answering: the organization option on the setup command
+   * binds this server to one organization, which is not what somebody
+   * choosing a set of organizations to follow is doing.
+   */
+  it('sends a manager binding to one organization to the option that does that', async () => {
+    const { context, via } = await started();
+    for (let index = 0; index < 30; index += 1) via.seedRso({ rsoId: 100 + index, name: `Society ${index}` });
+
+    const reply = await setupComponent.run(choose('setup:binding', ['rso']), context);
+    expect(reply.content).toContain('Run the setup command with the organization option');
+  });
+
+  it('tells a manager choosing a set to come back rather than to bind one organization', async () => {
+    const { context, via } = await started();
+    for (let index = 0; index < 30; index += 1) via.seedRso({ rsoId: 100 + index, name: `Society ${index}` });
+
+    const reply = await setupComponent.run(choose('setup:binding', ['set']), context);
+    expect(reply.content).toContain('run the config command again to add more');
+    expect(reply.content).not.toContain('organization option');
+  });
+
+  /**
+   * What a menu sends back is whatever arrived at the gateway, and three of
+   * these panels write it straight into a column that has room for nothing
+   * else. A value the menu never offered puts the panel back rather than
+   * writing a row nothing can read afterwards.
+   */
+  it('writes nothing for a kind of server the menu never offered', async () => {
+    const { context, guilds } = await started();
+    const reply = await setupComponent.run(choose('setup:kind', ['neither']), context);
+    expect((await guilds.getInstallation(GUILD))!.kind).toBe(null);
+    expect(reply.content).toContain('Step 1 of 5');
+  });
+
+  it('writes nothing for a binding the menu never offered', async () => {
+    const { context, guilds } = await started();
+    const reply = await setupComponent.run(choose('setup:binding', ['everything']), context);
+    expect((await guilds.getInstallation(GUILD))!.binding).toBe(null);
+    expect(reply.content).toContain('Step 2 of 5');
+  });
+
+  it('binds nothing for a channel purpose the menu never offered', async () => {
+    const { context, guilds } = await started();
+    const reply = await setupComponent.run(
+      choose('setup:channel:nonsense', ['700000000000000009']),
+      context,
+    );
+    expect(await guilds.listChannels(GUILD)).toEqual({});
+    expect(reply.content).toContain('Step 3 of 5');
+  });
+
+  it('unbinds nothing for a channel purpose the menu never offered', async () => {
+    const { context, guilds } = await started();
+    await guilds.bindChannel(GUILD, 'announcements', '700000000000000001');
+    await setupComponent.run(press('setup:unbind:nonsense'), context);
+    expect(await guilds.listChannels(GUILD)).toEqual({ announcements: '700000000000000001' });
   });
 
   it('offers every category as a page of its own', async () => {
@@ -309,7 +441,7 @@ describe('the panels, in the order setup walks through them', () => {
     const { context } = await started();
     const reply = await setupComponent.run(choose('setup:feature', ['announce.new']), context);
     expect(reply.content).toContain('Proactive posts');
-    expect(reply.content).toContain('announce.new');
+    expect(reply.content).toContain(featureById('announce.new').summary);
   });
 
   it('switches a feature off and back on again', async () => {
@@ -494,7 +626,7 @@ describe('a feature that cannot work', () => {
       category: 'proactive',
     });
     expect(panel.content).toContain('no channel is bound');
-    expect(panel.content).toContain('announce.new');
+    expect(panel.content).toContain(proactive.summary);
   });
 
   it('names the category the page is showing and says whether each feature on it is on', () => {
@@ -506,8 +638,8 @@ describe('a feature that cannot work', () => {
       category: 'command',
     });
     expect(panel.content).toContain('Commands');
-    expect(panel.content).toContain('on: events.list');
-    expect(panel.content).not.toContain('announce.new');
+    expect(panel.content).toContain(`on: ${featureById('events.list').summary}`);
+    expect(panel.content).not.toContain(proactive.summary);
   });
 
   it('refuses to switch on a feature that cannot work, and says what is missing', async () => {
@@ -531,16 +663,45 @@ describe('a feature that cannot work', () => {
 });
 
 describe('removing the bot from a server', () => {
-  it('deletes every row for the server and says how many of each it deleted', async () => {
-    const { context, guilds } = testContext();
-    await guilds.createInstallation(GUILD, ROSA);
-    await guilds.setKind(GUILD, 'community');
-    await guilds.setBinding(GUILD, { binding: 'set' });
-    await guilds.setFollowedRsos(GUILD, [1, 9]);
-    await guilds.bindChannel(GUILD, 'announcements', '700000000000000001');
-    await guilds.setFeatureEnabled(GUILD, 'events.list', false);
+  /**
+   * Removal deletes every scheduled event the bot created, unpins the message
+   * it pinned and deletes every row it holds for the server, and none of that
+   * can be undone. A manager reads what will go and presses a second time
+   * before any of it happens.
+   */
+  const confirm = () => setupComponent.run(press(REMOVE_BUTTON), context0!.context);
+  let context0: TestContext | null = null;
 
-    const reply = await removeCommand.run(manager({ commandName: 'via remove' }), context);
+  async function askedToRemove(overrides: Partial<CommandContext> = {}) {
+    const started = testContext();
+    context0 = { ...started, context: { ...started.context, ...overrides } } as TestContext;
+    await started.guilds.createInstallation(GUILD, ROSA);
+    await started.guilds.setKind(GUILD, 'community');
+    await started.guilds.setBinding(GUILD, { binding: 'set' });
+    await started.guilds.setFollowedRsos(GUILD, [1, 9]);
+    await started.guilds.bindChannel(GUILD, 'announcements', '700000000000000001');
+    await started.guilds.setFeatureEnabled(GUILD, 'events.list', false);
+    const asked = await removeCommand.run(manager({ commandName: 'via remove' }), context0.context);
+    return { ...started, context: context0.context, asked };
+  }
+
+  it('asks first, naming what will go, and deletes nothing yet', async () => {
+    const { guilds, asked } = await askedToRemove();
+
+    expect(asked.content).toContain('scheduled event');
+    expect(asked.content).toContain('every row');
+    const button = (asked.components ?? [])[0]!.components[0] as {
+      label: string; style: string; customId: string;
+    };
+    expect(button.label).toBe('Remove everything');
+    expect(button.style).toBe('danger');
+    expect(button.customId).toBe(REMOVE_BUTTON);
+    expect(await guilds.getInstallation(GUILD)).not.toBeNull();
+  });
+
+  it('deletes every row for the server once the manager confirms, and says how many of each', async () => {
+    const { guilds } = await askedToRemove();
+    const reply = await confirm();
 
     expect(await guilds.getInstallation(GUILD)).toBeNull();
     expect(reply.content).toContain('1 channel');
@@ -548,17 +709,30 @@ describe('removing the bot from a server', () => {
     expect(reply.content).toContain('1 feature');
   });
 
+  /**
+   * Removing the bot's rows is not the same as removing the bot, and a
+   * headline that said otherwise would leave a manager wondering why it is
+   * still in the member list.
+   */
+  it('says what has actually happened, which is not that the bot has left', async () => {
+    await askedToRemove();
+    const reply = await confirm();
+
+    expect(reply.content).toContain('The bot no longer posts anything in this server');
+    expect(reply.content).toContain('still a member of the server');
+    expect(reply.content).not.toContain('has been removed from this server');
+  });
+
   it('says that nothing about the people who used the bot has been deleted', async () => {
-    const { context, guilds } = testContext();
-    await guilds.createInstallation(GUILD, ROSA);
-    const reply = await removeCommand.run(manager({ commandName: 'via remove' }), context);
-    expect(reply.content).toContain('links');
+    await askedToRemove();
+    expect((await confirm()).content).toContain('links');
   });
 
   it('says so plainly when there was nothing set up to remove', async () => {
     const { context } = testContext();
     const reply = await removeCommand.run(manager({ commandName: 'via remove' }), context);
     expect(reply.content).toContain('nothing');
+    expect(reply.components ?? []).toEqual([]);
   });
 
   it('says so plainly when the hook cleared nothing either, which is the deployed case', async () => {
@@ -581,6 +755,16 @@ describe('removing the bot from a server', () => {
     expect(await guilds.getInstallation(GUILD)).not.toBeNull();
   });
 
+  it('refuses somebody without the permission on the confirmation as well', async () => {
+    const { guilds } = await askedToRemove();
+    const reply = await setupComponent.run(
+      press(REMOVE_BUTTON, { memberPermissions: [] }),
+      context0!.context,
+    );
+    expect(reply.content).toBe(NOT_A_MANAGER_MESSAGE);
+    expect(await guilds.getInstallation(GUILD)).not.toBeNull();
+  });
+
   /**
    * What the bot posted into the server goes before the rows that say where it
    * is, because those rows are what says where to look. The scheduled events
@@ -589,15 +773,13 @@ describe('removing the bot from a server', () => {
    */
   it('calls the hook that clears what the bot posted, when there is one', async () => {
     const cleared: string[] = [];
-    const { context, guilds } = testContext();
-    await guilds.createInstallation(GUILD, ROSA);
-    const reply = await removeCommand.run(manager({ commandName: 'via remove' }), {
-      ...context,
+    await askedToRemove({
       removeGuildPresence: async (guildId: string) => {
         cleared.push(guildId);
         return { scheduledEvents: 3, unpinnedMessages: 1 };
       },
     });
+    const reply = await confirm();
     expect(cleared).toEqual([GUILD]);
     expect(reply.content).toContain('3 scheduled events');
   });
@@ -661,7 +843,7 @@ describe('what Discord will carry', () => {
 
     for (const panel of walked) {
       expect(panel.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
-      expect((panel.components ?? []).length).toBeLessThanOrEqual(MAX_ROWS);
+      expect((panel.components ?? []).length).toBeLessThanOrEqual(MAX_MESSAGE_ROWS);
       for (const row of panel.components ?? []) {
         for (const component of row.components) {
           if (component.kind !== 'select') continue;

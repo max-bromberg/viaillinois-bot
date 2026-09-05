@@ -14,6 +14,16 @@ import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from '../config.ts';
  * others. All three answer with a sentence and a wait rather than with
  * silence.
  *
+ * A fourth window counts the completions a person's typing asks for. It is not
+ * one of the three, because an autocomplete is not a command: it fires on
+ * every keystroke, it is answered with a list rather than a sentence, and
+ * counting it against the command limit would refuse somebody for typing a
+ * name. So it is a subject of its own, counted over a minute rather than an
+ * hour, and set wide enough that nobody reaches it by typing. What it is for
+ * is the script that fires an autocomplete in a loop: every completion is a
+ * read and a cache entry keyed by whatever was typed, and a limit is what
+ * says how many of those one account may ask for.
+ *
  * The window is kept as one row per subject and minute, and the count is the
  * sum of the last sixty of those rows. That is a sliding window with a
  * minute of granularity, which costs at most sixty small rows per subject and
@@ -29,8 +39,11 @@ import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from '../config.ts';
 
 export type BotDatabase = MySql2Database<typeof schema>;
 
-/** Which limit applies: a person who has not linked, one who has, or a server. */
-export type RateTier = 'unlinked' | 'linked' | 'guild';
+/**
+ * Which limit applies: a person who has not linked, one who has, a server, or
+ * the completions a person's typing asks for.
+ */
+export type RateTier = 'unlinked' | 'linked' | 'guild' | 'autocomplete';
 
 /**
  * The limits themselves are read from the environment in src/config.ts,
@@ -43,6 +56,9 @@ export { DEFAULT_RATE_LIMITS };
 
 /** How long the window is, in minutes. */
 export const DEFAULT_WINDOW_MINUTES = 60;
+
+/** How long the autocomplete window is, which is the minute its limit is set per. */
+export const AUTOCOMPLETE_WINDOW_MINUTES = 1;
 
 /**
  * How long a bucket is kept after it stops counting. Twice the window is
@@ -95,6 +111,16 @@ export function guildSubject(guildId: string): string {
   return `guild:${guildId}`;
 }
 
+/**
+ * The typing of one Discord user, as the subject column spells it. It is kept
+ * apart from that person's commands so that a long afternoon of completions
+ * never costs them a command, and a long afternoon of commands never costs
+ * them a completion.
+ */
+export function autocompleteSubject(discordUserId: string): string {
+  return `autocomplete:${discordUserId}`;
+}
+
 /** The minute an instant falls in, as the column stores it. */
 function bucketOf(instant: Date): string {
   const minute = new Date(Math.floor(instant.getTime() / 60_000) * 60_000);
@@ -109,6 +135,7 @@ function instantOf(bucket: string): number {
 function limitFor(limits: RateLimits, tier: RateTier): number {
   if (tier === 'unlinked') return limits.unlinkedPerHour;
   if (tier === 'linked') return limits.linkedPerHour;
+  if (tier === 'autocomplete') return limits.autocompletePerMinute;
   return limits.guildPerHour;
 }
 
@@ -125,10 +152,13 @@ export function createRateWindows(options: RateWindowOptions): RateWindows {
     async consume(subject: string, tier: RateTier): Promise<RateDecision> {
       const instant = now();
       const limit = limitFor(limits, tier);
+      // The completions a person's typing asks for are counted over a minute,
+      // and everything else over the hour the design names.
+      const span = tier === 'autocomplete' ? AUTOCOMPLETE_WINDOW_MINUTES : windowMinutes;
       const current = bucketOf(instant);
       // The window holds this minute and the ones before it, so a bucket
       // leaves exactly one window after the minute it began in.
-      const earliest = bucketOf(new Date(instant.getTime() - (windowMinutes - 1) * 60_000));
+      const earliest = bucketOf(new Date(instant.getTime() - (span - 1) * 60_000));
 
       const rows = await db
         .select({ bucketStart: rateWindows.bucketStart, count: rateWindows.count })
@@ -146,7 +176,7 @@ export function createRateWindows(options: RateWindowOptions): RateWindows {
             null as string | null);
         const leavesAt = oldest === null
           ? instant.getTime()
-          : instantOf(oldest) + windowMinutes * 60_000;
+          : instantOf(oldest) + span * 60_000;
         const retryAfterSeconds = Math.max(1, Math.ceil((leavesAt - instant.getTime()) / 1000));
         return { allowed: false, used, limit, retryAfterSeconds };
       }

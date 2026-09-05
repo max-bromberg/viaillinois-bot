@@ -3,7 +3,7 @@ import {
   answerAutocomplete, applyReply, respond, respondByUpdate, showModal, toInteraction,
   FAILURE_MESSAGE, type Interaction, type Reply,
 } from '../discord/adapter.ts';
-import { guildSubject, userSubject, type RateTier } from '../ratelimit/windows.ts';
+import { autocompleteSubject, guildSubject, userSubject, type RateTier } from '../ratelimit/windows.ts';
 import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
 import { linkCommand, linkComponent } from './link.ts';
 import { unlinkCommand } from './unlink.ts';
@@ -23,7 +23,9 @@ import {
   postponeCommand, cancelCommand, describeCommand, visibilityCommand, repostCommand,
   noteCommand, adminComponent, adminFormComponent,
 } from './admin.ts';
-import { scheduleCommand, schedulerComponent, schedulerAcceptComponent } from './scheduler.ts';
+import {
+  scheduleCommand, schedulerComponent, schedulerAcceptComponent, schedulerNameComponent,
+} from './scheduler.ts';
 import { rolesCommand, rolesComponent } from './roles.ts';
 import { feedbackComponent, feedbackCommentComponent } from './feedback.ts';
 
@@ -41,6 +43,13 @@ export { unlinkCommand, deleteLocalData } from './unlink.ts';
  * answered straight away rather than acknowledged first, because there is no
  * work to wait for and a thinking state that resolves into a refusal reads
  * worse than a refusal.
+ *
+ * A server's own switches are kept here as well. Section 5 of the design gives
+ * every server a switch for every feature, and Discord has no per server view
+ * of a global command, so the command is still in the list in a server that
+ * switched it off and the refusal is the bot's to give. Setup and removal are
+ * the two that are never refused, because a switch that could stop either
+ * would leave a server with no way to switch anything back on.
  *
  * Three kinds of interaction reach a handler. A chat command runs the command
  * of that name. An autocomplete runs the completions of the command being
@@ -100,6 +109,10 @@ export const componentHandlers: readonly ComponentHandler[] = [
   // prefixes they sit inside, because the first prefix that matches answers.
   adminFormComponent,
   adminComponent,
+  // The button that opens the form comes before the accept button, and both
+  // before the handler whose prefix sits inside theirs, because the first
+  // prefix that matches answers.
+  schedulerNameComponent,
   schedulerAcceptComponent,
   schedulerComponent,
   rolesComponent,
@@ -112,6 +125,27 @@ export const componentHandlers: readonly ComponentHandler[] = [
 
 export const UNKNOWN_COMMAND_MESSAGE =
   'This bot does not answer that command. The command list may have changed since Discord last refreshed it, so please try again in a few minutes.';
+
+/**
+ * What somebody reads when a server manager has switched off the feature they
+ * just reached for.
+ *
+ * Section 5 of the design gives every server a switch for every feature, and
+ * Discord has no per server view of a global command, so the command is still
+ * offered in the list and the switch is kept here instead. The sentence names
+ * the command that puts it back, because the person who ran it is usually not
+ * the person who switched it off.
+ */
+export const FEATURE_OFF_MESSAGE =
+  'A server manager has switched this off in this server. Ask them to switch it back on with the config command.';
+
+/**
+ * The two features a server switch never refuses. Setting the bot up is how a
+ * manager switches anything on again, and removing it is how they get the bot
+ * out of a server, so a switch that could stop either would be a server with
+ * no way back.
+ */
+export const ALWAYS_ANSWERED: readonly string[] = ['setup.configure', 'setup.remove'];
 
 export const USER_LIMIT_MESSAGE = 'You have run too many VIA commands in the last hour.';
 export const GUILD_LIMIT_MESSAGE = 'This server has run too many VIA commands in the last hour.';
@@ -126,6 +160,21 @@ export const GUILD_LIMIT_MESSAGE = 'This server has run too many VIA commands in
  */
 export function tierOf(handler: CommandHandler | ComponentHandler): RateTier {
   return featureById(handler.featureId).tier === 'read' ? 'unlinked' : 'linked';
+}
+
+/**
+ * Whether a server has switched this feature off. A person in the bot's own
+ * direct messages, or in a group direct message, is in no server, and there is
+ * then nobody who could have switched anything off.
+ */
+export async function switchedOffHere(
+  handler: { featureId: string },
+  interaction: Pick<Interaction, 'guildId'>,
+  guilds: CommandContext['guilds'],
+): Promise<boolean> {
+  if (!interaction.guildId) return false;
+  if (ALWAYS_ANSWERED.includes(handler.featureId)) return false;
+  return !(await guilds.isFeatureEnabled(interaction.guildId, handler.featureId));
 }
 
 /**
@@ -215,14 +264,29 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
 
   /**
    * An autocomplete fires on every keystroke and expires in three seconds, so
-   * it is not counted against anybody: counting it would refuse a person for
-   * typing a name. What makes that affordable is that the reads behind it are
-   * the cached ones. A failure answers with no completions rather than
-   * throwing, because there is nobody waiting on a sentence.
+   * it is not counted against the command limit: counting it there would
+   * refuse a person for typing a name. It is counted against a window of its
+   * own instead, over a minute and against a subject of its own, because every
+   * completion is a read and a cache entry keyed by whatever was typed, and a
+   * script firing one in a loop must not be able to ask for those without
+   * bound. The limit is wide enough that nobody reaches it by typing.
+   *
+   * A refusal is answered with no completions rather than with a sentence,
+   * because Discord takes a list here and nothing else, and so is a failure,
+   * because there is nobody waiting on a sentence either.
    */
   async function complete(interaction: Interaction, raw: unknown): Promise<void> {
     const handler = interaction.commandName ? byName.get(interaction.commandName) : undefined;
     if (!handler?.autocomplete) {
+      await answerAutocomplete(raw, []);
+      return;
+    }
+
+    const typing = await context.rateWindows.consume(
+      autocompleteSubject(interaction.userId),
+      'autocomplete',
+    );
+    if (!typing.allowed) {
       await answerAutocomplete(raw, []);
       return;
     }
@@ -232,6 +296,22 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       console.error('completing an option failed:', (err as Error).message);
       await answerAutocomplete(raw, []);
     }
+  }
+
+  /**
+   * Refuse a feature this server switched off, with the sentence that names
+   * the way to put it back. It is answered straight away rather than
+   * acknowledged first, for the same reason a rate limit refusal is: there is
+   * no work to wait for.
+   */
+  async function refusedByTheServer(
+    handler: { featureId: string },
+    interaction: Interaction,
+    raw: unknown,
+  ): Promise<boolean> {
+    if (!(await switchedOffHere(handler, interaction, context.guilds))) return false;
+    await applyReply(raw, { content: FEATURE_OFF_MESSAGE, ephemeral: true });
+    return true;
   }
 
   return async function dispatch(raw: unknown): Promise<void> {
@@ -252,6 +332,7 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       // that no longer exists helps nobody.
       if (!handler) return;
 
+      if (await refusedByTheServer(handler, interaction, raw)) return;
       if (!(await withinLimits(interaction, tierOf(handler), raw))) return;
 
       // A handler that may open a form is run before anything is
@@ -287,6 +368,7 @@ export function createDispatcher(context: CommandContext): (raw: unknown) => Pro
       return;
     }
 
+    if (await refusedByTheServer(handler, interaction, raw)) return;
     if (!(await withinLimits(interaction, tierOf(handler), raw))) return;
 
     if (handler.opensModal) {

@@ -25,6 +25,13 @@ export interface RateLimitConfig {
   unlinkedPerHour: number;
   linkedPerHour: number;
   guildPerHour: number;
+  /**
+   * How many completions one Discord account may ask for in a minute. An
+   * autocomplete is not a command, so it is counted over its own window and
+   * against its own subject, and this is set wide enough that nobody reaches
+   * it by typing a name.
+   */
+  autocompletePerMinute: number;
 }
 
 export interface BotConfig {
@@ -76,6 +83,9 @@ export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
   unlinkedPerHour: 30,
   linkedPerHour: 120,
   guildPerHour: 600,
+  // Five completions a second for a whole minute is more typing than anybody
+  // does, and it still bounds what one account can ask the caches to hold.
+  autocompletePerMinute: 300,
 };
 
 type Environment = Record<string, string | undefined>;
@@ -102,6 +112,18 @@ function commandsPerHour(env: Environment, name: string, fallback: number): numb
   if (!/^\d{1,7}$/.test(raw) || Number(raw) === 0) {
     throw new Error(
       `The environment variable ${name} must be a whole number of commands per hour, and "${raw}" is not one.`
+    );
+  }
+  return Number(raw);
+}
+
+/** The same reading for the window that is counted per minute rather than per hour. */
+function completionsPerMinute(env: Environment, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  if (!/^\d{1,7}$/.test(raw) || Number(raw) === 0) {
+    throw new Error(
+      `The environment variable ${name} must be a whole number of completions per minute, and "${raw}" is not one.`
     );
   }
   return Number(raw);
@@ -151,6 +173,11 @@ export function loadConfig(env: Environment = process.env): BotConfig {
       unlinkedPerHour: commandsPerHour(env, 'RATE_LIMIT_UNLINKED_PER_HOUR', DEFAULT_RATE_LIMITS.unlinkedPerHour),
       linkedPerHour: commandsPerHour(env, 'RATE_LIMIT_LINKED_PER_HOUR', DEFAULT_RATE_LIMITS.linkedPerHour),
       guildPerHour: commandsPerHour(env, 'RATE_LIMIT_GUILD_PER_HOUR', DEFAULT_RATE_LIMITS.guildPerHour),
+      autocompletePerMinute: completionsPerMinute(
+        env,
+        'RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE',
+        DEFAULT_RATE_LIMITS.autocompletePerMinute,
+      ),
     },
   };
 }

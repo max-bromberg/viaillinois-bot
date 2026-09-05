@@ -54,6 +54,23 @@ export function answerFor(err: unknown): Reply {
   throw err;
 }
 
+/**
+ * The web platform's own sentence, made fit to sit beside one of the bot's.
+ *
+ * Two of the refusals a person reads are the web platform's words with a
+ * sentence of the bot's after them, because the web platform names the field
+ * or the clash and the bot could only say less. What the bot owes is that the
+ * two read as one answer: the web platform's words are given the full stop
+ * they may not carry, and the dash characters the language rule forbids are
+ * written as the comma they stand for, because a sentence the bot shows is a
+ * sentence the bot is answerable for however it arrived.
+ */
+export function asSentence(message: string): string {
+  const text = String(message ?? '').trim().replace(/\s*[\u2013\u2014]\s*/g, ', ');
+  if (!text) return '';
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 /** A whole number an option or an identifier carries, or null when it is anything else. */
 export function identifier(value: unknown): number | null {
   const text = String(value ?? '').trim();
@@ -125,12 +142,12 @@ export async function actOnVia<T>(
         return { ok: false, reply: { content: notAnEditorMessage(options.rsoName ?? null) } };
       }
       if (err.code === 'conflict') {
-        return { ok: false, reply: { content: `${err.message} Nothing has been changed.` } };
+        return { ok: false, reply: { content: spliced(err.message) } };
       }
       // A value the web platform will not take is answered with the sentence
       // the web platform wrote about it, because it names the field.
       if (err.code === 'invalid') {
-        return { ok: false, reply: { content: `${err.message} Nothing has been changed.` } };
+        return { ok: false, reply: { content: spliced(err.message) } };
       }
       if (err.code === 'not_found') {
         return { ok: false, reply: { content: NOTHING_TO_ACT_ON_MESSAGE } };
@@ -139,6 +156,11 @@ export async function actOnVia<T>(
     }
     throw err;
   }
+}
+
+/** The web platform's sentence with the bot's own after it. */
+function spliced(message: string): string {
+  return [asSentence(message), 'Nothing has been changed.'].filter(Boolean).join(' ');
 }
 
 export const NOTHING_TO_ACT_ON_MESSAGE =

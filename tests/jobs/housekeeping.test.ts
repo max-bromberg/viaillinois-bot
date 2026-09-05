@@ -4,6 +4,7 @@ import {
 } from '../../src/jobs/housekeeping.ts';
 import { ANNOUNCEMENTS_CONSUMER, type CursorState, type OutboxCursors } from '../../src/outbox/cursor.ts';
 import { memoryGuildStore } from '../commands/support.ts';
+import { NO_OUTBOX_ENTRY, type Delivery } from '../../src/delivery/deliveries.ts';
 import type { GuildInstallation, GuildStore } from '../../src/guilds/store.ts';
 import type { JobHour } from '../../src/jobs/scheduler.ts';
 
@@ -62,6 +63,7 @@ describe('the daily housekeeping', () => {
   let rolled: string[];
   let guilds: GuildStore;
   let cursors: ReturnType<typeof memoryCursors>;
+  let owed: Delivery[];
 
   function built(options: { cursors?: OutboxCursors } = {}) {
     return createHousekeepingJob({
@@ -69,6 +71,9 @@ describe('the daily housekeeping', () => {
         async pruneBefore(intendedBefore: string) {
           pruned.deliveriesBefore.push(intendedBefore);
           return 3;
+        },
+        async pending() {
+          return owed;
         },
       },
       rateWindows: {
@@ -97,6 +102,7 @@ describe('the daily housekeeping', () => {
   beforeEach(async () => {
     pruned = { deliveriesBefore: [], windowsBefore: [] };
     rolled = [];
+    owed = [];
     guilds = memoryGuildStore();
     cursors = memoryCursors({ lastOutboxId: 41, updatedAt: '2026-09-05 03:00:00' });
   });
@@ -171,7 +177,7 @@ describe('the daily housekeeping', () => {
     const stale = memoryCursors({ lastOutboxId: 41, updatedAt: '2026-06-01 03:00:00' });
 
     const job = createHousekeepingJob({
-      deliveries: { async pruneBefore() { return 0; } },
+      deliveries: { async pruneBefore() { return 0; }, async pending() { return []; } },
       rateWindows: { async pruneBefore() { return 0; } },
       cursors: stale,
       guilds,
@@ -207,6 +213,7 @@ describe('the daily housekeeping', () => {
           pruned.deliveriesBefore.push(intendedBefore);
           return 1;
         },
+        async pending() { return []; },
       },
       rateWindows: { async pruneBefore() { return 0; } },
       cursors: stale,
@@ -227,5 +234,118 @@ describe('the daily housekeeping', () => {
     };
     await built({ cursors: watched }).run(EARLY);
     expect(asked).toEqual([ANNOUNCEMENTS_CONSUMER]);
+  });
+});
+
+/**
+ * The posts the bot was still owed when it stopped.
+ *
+ * A delivery row that was written and never posted is a post that has not
+ * been made. For a row that belongs to an outbox entry, the way to make it is
+ * to read that entry again, so the bot starts by moving the cursor back to
+ * just before the oldest entry it still owes something for. Everything
+ * between there and where the cursor was has already been posted, and the
+ * delivery rows that say so are what stop any of it being posted twice.
+ */
+describe('draining what the bot still owes at startup', () => {
+  const EARLY = hourOf('2026-09-05T09:00:00Z');
+
+  let pruned: { deliveriesBefore: string[]; windowsBefore: Date[] };
+  let rolled: string[];
+  let guilds: GuildStore;
+  let cursors: ReturnType<typeof memoryCursors>;
+  let owed: Delivery[];
+
+  function pending(overrides: Partial<Delivery> = {}): Delivery {
+    return {
+      deliveryId: 1,
+      outboxId: 7,
+      target: 'channel:700000000000000001',
+      purpose: 'event.created',
+      kind: 'message',
+      messageId: null,
+      deliveredAt: null,
+      ...overrides,
+    };
+  }
+
+  function built() {
+    return createHousekeepingJob({
+      deliveries: {
+        async pruneBefore(intendedBefore: string) {
+          pruned.deliveriesBefore.push(intendedBefore);
+          return 0;
+        },
+        async pending() { return owed; },
+      },
+      rateWindows: {
+        async pruneBefore(before: Date) {
+          pruned.windowsBefore.push(before);
+          return 0;
+        },
+      },
+      cursors,
+      guilds,
+      mirror: {
+        async rollGuild(installation: GuildInstallation) {
+          rolled.push(installation.guildId);
+          return 0;
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    pruned = { deliveriesBefore: [], windowsBefore: [] };
+    rolled = [];
+    guilds = memoryGuildStore();
+    cursors = memoryCursors({ lastOutboxId: 41, updatedAt: '2026-09-05 03:00:00' });
+    owed = [];
+  });
+
+  it('reads the outbox again from just before the oldest entry it owes a post for', async () => {
+    owed = [pending({ deliveryId: 1, outboxId: 12 }), pending({ deliveryId: 2, outboxId: 7 })];
+
+    const result = await built().drainPending();
+    expect(result.owed).toBe(2);
+    expect(result.rewoundTo).toBe(6);
+    expect(cursors.held()!.lastOutboxId).toBe(6);
+  });
+
+  it('leaves the cursor where it is when nothing is owed', async () => {
+    const result = await built().drainPending();
+    expect(result.owed).toBe(0);
+    expect(result.rewoundTo).toBe(null);
+    expect(cursors.held()!.lastOutboxId).toBe(41);
+  });
+
+  /**
+   * A digest, a reminder or a scheduled event owes itself to a job on a
+   * clock rather than to an outbox entry, and that job makes it on its next
+   * pass. Moving the cursor for one of those would read the outbox again for
+   * no reason at all.
+   */
+  it('leaves the cursor where it is for a post that belongs to no outbox entry', async () => {
+    owed = [pending({ outboxId: NO_OUTBOX_ENTRY, purpose: 'digest:2026-09-06' })];
+
+    const result = await built().drainPending();
+    expect(result.owed).toBe(1);
+    expect(result.rewoundTo).toBe(null);
+    expect(cursors.held()!.lastOutboxId).toBe(41);
+  });
+
+  it('never moves the cursor forward', async () => {
+    cursors = memoryCursors({ lastOutboxId: 3, updatedAt: '2026-09-05 03:00:00' });
+    owed = [pending({ outboxId: 20 })];
+
+    const result = await built().drainPending();
+    expect(result.rewoundTo).toBe(null);
+    expect(cursors.held()!.lastOutboxId).toBe(3);
+  });
+
+  it('does not drain as part of the daily run, because it belongs to a startup', async () => {
+    owed = [pending({ outboxId: 7 })];
+    await built().run(EARLY);
+    expect(cursors.held()!.lastOutboxId).toBe(41);
   });
 });

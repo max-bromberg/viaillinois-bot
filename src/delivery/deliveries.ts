@@ -92,6 +92,13 @@ export interface Deliveries {
   intend(intent: DeliveryIntent): Promise<IntendedDelivery>;
   /** Record that the post was made, with the message it left behind if it left one. */
   recordPosted(deliveryId: number, messageId?: string | null): Promise<void>;
+  /**
+   * Forget a delivery that will never be made, because what it was going to
+   * post into has gone. It is deleted rather than recorded as posted, because
+   * nothing was posted and a row that said otherwise would be a lie about
+   * what the bot did.
+   */
+  abandon(deliveryId: number): Promise<void>;
   /** Every delivery that was intended and never posted, oldest first. */
   pending(): Promise<Delivery[]>;
   /** One delivery by its key, or null when nothing intended it. */
@@ -179,6 +186,10 @@ export function createDeliveries(db: BotDatabase, options: DeliveriesOptions = {
       await db.update(deliveries)
         .set({ messageId, deliveredAt: campusStamp(now()) })
         .where(eq(deliveries.deliveryId, deliveryId));
+    },
+
+    async abandon(deliveryId: number): Promise<void> {
+      await db.delete(deliveries).where(eq(deliveries.deliveryId, deliveryId));
     },
 
     async pruneBefore(intendedBefore: string): Promise<number> {

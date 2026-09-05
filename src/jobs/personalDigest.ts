@@ -31,8 +31,18 @@ import type { ViaClient } from '../via/client.ts';
 /** How far ahead a digest looks, which is the coming week. */
 export const DIGEST_DAYS = 6;
 
-/** How many events one digest lists at most. */
-export const DIGEST_LIMIT = 100;
+/**
+ * How many events one digest asks for.
+ *
+ * Discord carries two thousand characters, and a line of a digest runs to
+ * something under a hundred, so a message holds somewhere around twenty five
+ * days and events together. Sixty is comfortably more than any digest will
+ * show and small enough that somebody who follows every organization does not
+ * read a hundred rows out of the web platform to throw most of them away. What
+ * is read and does not fit is cut by fitToMessage, which says where the rest
+ * of the week is.
+ */
+export const DIGEST_LIMIT = 60;
 
 /** What a delivery of a digest is for, which is one person and one week. */
 export function personalDigestPurpose(day: string): string {
@@ -42,7 +52,7 @@ export function personalDigestPurpose(day: string): string {
 export interface PersonalDigestJobOptions {
   feed: FeedStore;
   deliveries: Deliveries;
-  via: Pick<ViaClient, 'listEvents'>;
+  via: Pick<ViaClient, 'listEvents' | 'getLink'>;
   deliver: DirectMessageDelivery;
 }
 
@@ -79,15 +89,24 @@ export function createPersonalDigestJob(options: PersonalDigestJobOptions): Pers
             continue;
           }
 
+          // Section 10 of the design: the bot writes only to linked people.
+          // A row left behind by a link the bot never heard go away would
+          // otherwise become a message nobody asked for.
+          if (!(await via.getLink(person.discordUserId))) {
+            result.skipped += 1;
+            continue;
+          }
+
           const intended = await deliveries.intend({
             outboxId: NO_OUTBOX_ENTRY,
             target: userTarget(person.discordUserId),
             purpose: personalDigestPurpose(hour.day),
             kind: 'direct_message',
           });
-          // Somebody, possibly this job before it fell over, has already
-          // written to this person about this week.
-          if (!intended.isNew) {
+          // A row that carries the moment it was posted is a message that
+          // has arrived. A row that carries none was written and never sent,
+          // which is a message this person is still owed.
+          if (!intended.isNew && intended.deliveredAt !== null) {
             result.skipped += 1;
             continue;
           }

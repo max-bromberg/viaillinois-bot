@@ -7,6 +7,16 @@ import type { Client } from 'discord.js';
 import type { DiscordPermission, InteractionContext } from '../features/registry.ts';
 
 /**
+ * What Discord will carry in one message: how long it may be, and how many
+ * rows of components it may hold. Both are Discord's limits rather than the
+ * bot's, and they are named here because this is the module that is about
+ * Discord itself. Everything that builds a message reads them from here rather
+ * than keeping a number of its own.
+ */
+export const MAX_MESSAGE_LENGTH = 2000;
+export const MAX_MESSAGE_ROWS = 5;
+
+/**
  * The seam between discord.js and everything else.
  *
  * Interactions arrive here and leave as plain objects. Answers arrive here as

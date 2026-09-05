@@ -4,6 +4,7 @@ import {
   midtermLine, noExamsFor, renderBuilding, renderCourseSections, renderExamReminder,
   renderExamsThisWeek, renderFreeRooms, renderMidtermNotice, renderMidterms,
 } from '../../src/render/campus.ts';
+import { MAX_MESSAGE_LENGTH } from '../../src/render/digest.ts';
 import type { Course, FreeRooms, Midterm } from '../../src/via/client.ts';
 
 /**
@@ -227,5 +228,31 @@ describe('one building', () => {
     expect(content).toContain('Electrical & Computer Eng Bldg');
     expect(content).toContain('no address');
     expect(content).toMatch(NO_DASHES);
+  });
+});
+
+/**
+ * A week of exams has to fit in one message for the same reason a week of
+ * events does: Discord refuses anything longer outright, so a busy week with
+ * nothing done about it is a message nobody receives.
+ */
+describe('fitting the exams into one message', () => {
+  const busyWeek = () => Array.from({ length: 120 }, (_unused, index) => midterm({
+    midtermId: index,
+    courseCode: `ECE ${300 + index}`,
+    title: `Midterm ${index} of a course with a fairly long name`,
+    startTime: `2026-09-0${(index % 3) + 7}T18:00:00-05:00`,
+    endTime: `2026-09-0${(index % 3) + 7}T19:00:00-05:00`,
+  }));
+
+  it('keeps the exams a server posts inside what Discord will carry', () => {
+    const reply = renderExamsThisWeek({ weekStart: '2026-09-06', midterms: busyWeek() });
+    expect(reply.content.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(reply.content).toContain('The exams this week');
+  });
+
+  it('keeps the exams of one course inside what Discord will carry', () => {
+    const message = renderMidterms('ECE 385', busyWeek());
+    expect(message.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
   });
 });

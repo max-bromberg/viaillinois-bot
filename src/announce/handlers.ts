@@ -3,16 +3,20 @@ import {
   type OutboxEntry, type SeriesChange, type ViaClient, type ViaEvent,
 } from '../via/client.ts';
 import {
-  isMove, renderCancellationNotice, renderEventAnnouncement, renderMoveNotice,
-  renderRemovedAnnouncement, renderSeriesAnnouncement,
+  isMove, renderCancellationNotice, renderEventAnnouncement, renderInternalAnnouncement,
+  renderMoveNotice, renderRemovedAnnouncement, renderSeriesAnnouncement,
 } from '../render/announcement.ts';
-import { channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { renderCancelledReminder } from '../render/digest.ts';
+import { channelTarget, userTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { createSpread, type SpreadOptions } from '../delivery/spread.ts';
 import { channelFor, noChannelReason } from '../guilds/channels.ts';
 import { isMissingAccess, isMissingMessage, type DiscordActions, type Reply } from '../discord/adapter.ts';
 import type { OutboxHandlers } from '../outbox/consumer.ts';
 import type { EventMirror, EventMirrors } from '../mirror/eventMirrors.ts';
 import type { ScheduledEventMirror } from '../mirror/scheduledEvents.ts';
 import type { FeatureDisabler } from '../guilds/disable.ts';
+import type { DirectMessageDelivery } from '../discord/directMessages.ts';
+import type { FeedStore } from '../feed/store.ts';
 import type { GuildInstallation, GuildStore } from '../guilds/store.ts';
 import type { ThisWeekMessage } from './thisWeek.ts';
 
@@ -46,8 +50,15 @@ import type { ThisWeekMessage } from './thisWeek.ts';
  * announcements channel is read by the whole server and an internal event is
  * for the members of one organization.
  *
+ * A cancellation reaches one more set of people. Somebody who pressed Remind
+ * me asked to be told about that event, and an event that is not happening is
+ * the thing they most need to be told, so each of them receives one direct
+ * message and their reminder goes with it. That is what the cancellation
+ * command promises whoever cancelled, and this is where it is kept.
+ *
  * Every post goes through Deliveries first, keyed by the outbox entry, the
- * channel and the kind, so that an entry handled twice posts once.
+ * channel or the person, and the kind, so that an entry handled twice posts
+ * once.
  */
 
 /** The feature a server switches on to hear about new events. */
@@ -72,12 +83,19 @@ export function featureFor(kind: string): string {
   return kind.endsWith('.created') ? NEW_FEATURE : CHANGES_FEATURE;
 }
 
-export interface AnnouncementHandlerOptions {
+export interface AnnouncementHandlerOptions extends SpreadOptions {
   guilds: GuildStore;
   mirrors: EventMirrors;
   deliveries: Deliveries;
   actions: DiscordActions;
-  via: Pick<ViaClient, 'getEvent'>;
+  via: Pick<ViaClient, 'getEvent' | 'getLink'>;
+  /**
+   * The reminders people asked for, which a cancellation reads and then
+   * clears, and the preferences that say whether the bot may write to them.
+   */
+  feed: Pick<FeedStore, 'remindersForEvent' | 'preferences' | 'savePreferences' | 'removeReminder'>;
+  /** How one direct message is sent, which is the same seam the jobs use. */
+  deliver: DirectMessageDelivery;
   disable: FeatureDisabler;
   /** The public address of the website, which the buttons on a card open. */
   websiteUrl: string;
@@ -95,10 +113,17 @@ export interface AnnouncementHandlerOptions {
 
 export function createAnnouncementHandlers(options: AnnouncementHandlerOptions): OutboxHandlers {
   const {
-    guilds, mirrors, deliveries, actions, via, disable, websiteUrl, mirror, thisWeek,
-    now = () => new Date(),
+    guilds, mirrors, deliveries, actions, via, feed, deliver, disable, websiteUrl, mirror,
+    thisWeek, now = () => new Date(),
   } = options;
   const cardOptions = { websiteUrl };
+  /**
+   * The pause between one server and the next. One event created on the
+   * website reaches every server that follows the organization, and section 9
+   * of the design asks that those posts are spread rather than fired in the
+   * same second.
+   */
+  const spread = createSpread(options);
 
   /**
    * The channel a server announces in, or nothing when it has none. A server
@@ -135,7 +160,10 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       kind: 'message',
     });
 
-    if (!intended.isNew) {
+    // A row that carries the moment it was posted is a post that has been
+    // made, and a row that carries none is one that was intended and never
+    // made, which is still owed and is made now.
+    if (!intended.isNew && intended.deliveredAt !== null) {
       if (intended.messageId) {
         await mirrors.recordAnnouncement(guildId, eventId, { channelId, messageId: intended.messageId });
       }
@@ -148,7 +176,9 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
     } catch (err) {
       if (!isMissingAccess(err)) throw err;
       // The channel the server bound has been deleted or closed to the bot,
-      // which is the same fault as unbinding it.
+      // which is the same fault as unbinding it. The intention goes with the
+      // feature, because there is nowhere left for it to be posted.
+      await deliveries.abandon(intended.deliveryId);
       await disable.disable(guildId, featureFor(entry.kind), NO_CHANNEL_REASON);
       return;
     }
@@ -166,7 +196,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       purpose: entry.kind,
       kind: 'edit',
     });
-    if (!intended.isNew) return;
+    if (!intended.isNew && intended.deliveredAt !== null) return;
 
     try {
       await actions.editMessage(channelId, held.announcementMessageId!, reply);
@@ -188,7 +218,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       purpose: noticePurpose(entry.kind),
       kind: 'message',
     });
-    if (!intended.isNew) return;
+    if (!intended.isNew && intended.deliveredAt !== null) return;
 
     let messageId: string;
     try {
@@ -197,6 +227,9 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       });
     } catch (err) {
       if (!isMissingAccess(err)) throw err;
+      // There is no channel left to reply in, so the notice is owed to
+      // nobody and the row that said it was owed goes with it.
+      await deliveries.abandon(intended.deliveryId);
       return;
     }
     await deliveries.recordPosted(intended.deliveryId, messageId);
@@ -210,7 +243,8 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
 
   /** Announce something new, in every server that follows it. */
   async function announceNew(entry: OutboxEntry, event: ViaEvent, reply: Reply): Promise<void> {
-    for (const installation of await serversFor(entry, event)) {
+    for (const [index, installation] of (await serversFor(entry, event)).entries()) {
+      await spread(index);
       const channelId = await announcementChannel(installation.guildId, NEW_FEATURE);
       if (channelId) await post(entry, installation.guildId, channelId, event.eventId, reply);
     }
@@ -228,10 +262,16 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
     noticeContent: string | null,
     event: ViaEvent | null,
   ): Promise<void> {
+    // Counted over the servers that actually have an announcement to keep
+    // current, so that a server with nothing to do costs nothing and the
+    // first server that does is not waited for.
+    let posted = 0;
     for (const installation of await serversFor(entry, event)) {
       const held = await announcementFor(installation.guildId, eventIds);
       // A server that never announced this event has nothing to keep current.
       if (!held) continue;
+      await spread(posted);
+      posted += 1;
       if (!(await guilds.isFeatureEnabled(installation.guildId, CHANGES_FEATURE))) continue;
 
       await edit(entry, held, reply);
@@ -294,6 +334,52 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
     return null;
   }
 
+  /**
+   * Tell everybody holding a reminder for this event that it is not happening,
+   * and then take the reminder away.
+   *
+   * Three things decide whether the message is sent, and each of them is one
+   * the bot obeys everywhere else: the person's own direct message switch,
+   * whether the web platform still knows the account, and Deliveries, keyed by
+   * the entry and the person. The reminder goes whichever way those answer,
+   * because the event is cancelled and a reminder for it would fire about
+   * nothing.
+   */
+  async function tellReminderHolders(entry: OutboxEntry, event: ViaEvent): Promise<void> {
+    for (const reminder of await feed.remindersForEvent(event.eventId)) {
+      const discordUserId = reminder.discordUserId;
+      const preferences = await feed.preferences(discordUserId);
+      const writable = !preferences.directMessageOptOut && Boolean(await via.getLink(discordUserId));
+
+      if (writable) {
+        const intended = await deliveries.intend({
+          outboxId: entry.outboxId,
+          target: userTarget(discordUserId),
+          purpose: entry.kind,
+          kind: 'direct_message',
+        });
+
+        if (intended.isNew || intended.deliveredAt === null) {
+          const outcome = await deliver(discordUserId, { content: renderCancelledReminder(event) });
+          if (outcome === 'failed') {
+            // The delivery row stays pending and the reminder stays where it
+            // is, which together say the message is still owed, and the entry
+            // is asked for again.
+            throw new Error(`telling ${discordUserId} that event ${event.eventId} was cancelled failed`);
+          }
+          if (outcome === 'blocked') {
+            await feed.savePreferences(discordUserId, { directMessageOptOut: true });
+          }
+          // A blocked message is recorded as well, because it is not going to
+          // arrive on a second attempt either.
+          await deliveries.recordPosted(intended.deliveryId, null);
+        }
+      }
+
+      await feed.removeReminder(reminder.reminderId);
+    }
+  }
+
   /** The event an entry carries, or nothing when the entry is not about one. */
   function eventOf(entry: OutboxEntry): ViaEvent | null {
     const event = outboxEvent(entry);
@@ -338,11 +424,19 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
       if (!event) return;
       const changed = outboxChangedFields(entry);
 
+      // An event the organization has marked internal keeps none of its
+      // details in a channel the whole server reads, and there is nothing to
+      // post a notice about either: the change is that it is no longer
+      // announced here.
       await announceChange(
         entry,
         [event.eventId],
-        renderEventAnnouncement(event, cardOptions),
-        isMove(changed) ? renderMoveNotice(event, changed, outboxReason(entry)) : null,
+        event.isPrivate
+          ? renderInternalAnnouncement()
+          : renderEventAnnouncement(event, cardOptions),
+        !event.isPrivate && isMove(changed)
+          ? renderMoveNotice(event, changed, outboxReason(entry))
+          : null,
         event,
       );
       await mirrorEvent(entry, event);
@@ -361,6 +455,7 @@ export function createAnnouncementHandlers(options: AnnouncementHandlerOptions):
         event,
       );
       await mirrorEvent(entry, event);
+      await tellReminderHolders(entry, event);
       await refreshThisWeek(entry, event);
     },
 

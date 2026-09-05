@@ -6,6 +6,20 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+- The first review of the whole of the first release, and the work it asked for. Deliveries
+  are retried rather than treated as made, so a post Discord refused once is made when the
+  entry or the hour comes round again, and the posts still owed at a restart are drained by
+  reading the outbox from the oldest of them. The two link outbox kinds are handled at last,
+  so a link made on the website is confirmed by direct message and one revoked there deletes
+  everything the bot held, including the Discord roles it had given. Every server switch is
+  now enforced when a command runs, the reading commands answer the channel in a server that
+  invited the bot, and the people holding a reminder for an event that is cancelled are told,
+  which the cancellation command had been promising all along. The gateway intents are down
+  to the two the bot reads, both unprivileged. A great deal of copy was rewritten: the setup
+  panels say what a feature does rather than the identifier the bot keys it by, lead times
+  read as a day rather than as 1440 minutes, and removal asks first and then says what has
+  actually happened. `docs/decisions.md` records the decisions this took.
+
 - Feedback after an event, from section 6.4: the morning after an event, the linked people
   who marked interest in it or asked to be reminded of it receive one direct message with
   five buttons, a comment through a form, and a button that stops the bot asking again. The

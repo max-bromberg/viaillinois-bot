@@ -20,10 +20,14 @@ import {
  * feature can also name a group of its own, which is how the two personal feed
  * settings commands sit together under `/feed`.
  *
- * The commands are registered globally, once, at startup. Whether a server
- * has a feature switched on is decided when the command runs, because Discord
- * has no per server view of a global command, and a server that switched a
- * feature off gets a sentence saying so rather than a command that vanishes.
+ * The commands are registered globally, once, at startup. Whether a server has
+ * a feature switched on is decided when the command runs, in the dispatcher,
+ * because Discord has no per server view of a global command: a server that
+ * switched a feature off still sees the command in the list, and the person
+ * who runs it reads a sentence saying so rather than finding a command that
+ * vanished. Setting the bot up and removing it are the two features that
+ * sentence is never given for, because a switch that could stop either would
+ * leave a server with no way to switch anything back on.
  */
 
 /** The one group everything for setup and for boards sits under. */
@@ -86,14 +90,27 @@ function commandFeatures(features: readonly Feature[]): Feature[] {
 }
 
 /**
- * The names one feature is reached by, the declared one first. A feature with
- * two names becomes two commands over one implementation, which is how setup
- * and config open the same panels.
+ * The names one feature is reached by, the declared one first, each with the
+ * options it takes.
+ *
+ * A feature with two names becomes two commands over one implementation, which
+ * is how setup and config open the same panels. The options belong to the name
+ * rather than to the feature, because two names over one set of rows do not
+ * always ask the same question: reading back what somebody follows takes no
+ * option, and unfollowing names an organization.
  */
-function namesOf(command: FeatureCommand): { name: string; description: string }[] {
+function namesOf(command: FeatureCommand): {
+  name: string;
+  description: string;
+  options: readonly FeatureCommandOption[];
+}[] {
   return [
-    { name: command.name, description: command.description },
-    ...(command.alternateNames ?? []).map(alternate => ({ ...alternate })),
+    { name: command.name, description: command.description, options: command.options ?? [] },
+    ...(command.alternateNames ?? []).map(alternate => ({
+      name: alternate.name,
+      description: alternate.description,
+      options: alternate.options ?? [],
+    })),
   ];
 }
 
@@ -109,19 +126,22 @@ function optionJson(option: FeatureCommandOption): CommandOptionJson {
   return built;
 }
 
-function optionsJson(command: FeatureCommand): CommandOptionJson[] | undefined {
-  if (!command.options || command.options.length === 0) return undefined;
+function optionsJson(
+  name: string,
+  options: readonly FeatureCommandOption[],
+): CommandOptionJson[] | undefined {
+  if (options.length === 0) return undefined;
 
   // Discord refuses a whole command whose required options do not come first,
   // and refuses it at startup with a message about an option index. Catching
   // it here names the command instead.
-  const firstOptional = command.options.findIndex(option => !option.required);
-  const lastRequired = command.options.map(option => Boolean(option.required)).lastIndexOf(true);
+  const firstOptional = options.findIndex(option => !option.required);
+  const lastRequired = options.map(option => Boolean(option.required)).lastIndexOf(true);
   if (firstOptional !== -1 && lastRequired > firstOptional) {
-    throw new Error(`The command ${command.name} has a required option after an optional one, which Discord refuses.`);
+    throw new Error(`The command ${name} has a required option after an optional one, which Discord refuses.`);
   }
 
-  return command.options.map(optionJson);
+  return options.map(optionJson);
 }
 
 function contextsOf(features: readonly Feature[]): InteractionContextType[] {
@@ -157,15 +177,19 @@ function qualifiedName(group: string | null, name: string): string {
   return group ? `${group} ${name}` : name;
 }
 
-/** One subcommand, with the options of the command it stands for under it. */
-function subcommandJson(command: FeatureCommand, name: string, description: string): CommandOptionJson {
+/** One subcommand, with its own options under it. */
+function subcommandJson(
+  name: string,
+  description: string,
+  options: readonly FeatureCommandOption[],
+): CommandOptionJson {
   const subcommand: CommandOptionJson = {
     type: ApplicationCommandOptionType.Subcommand,
     name,
     description,
   };
-  const options = optionsJson(command);
-  if (options) subcommand.options = options;
+  const built = optionsJson(name, options);
+  if (built) subcommand.options = built;
   return subcommand;
 }
 
@@ -185,7 +209,7 @@ export function buildCommands(features: readonly Feature[] = allFeatures): Comma
   const commands: CommandJson[] = declared
     .filter(feature => groupOf(feature) === null)
     .flatMap(feature =>
-      namesOf(feature.command!).map(({ name, description }) => {
+      namesOf(feature.command!).map(({ name, description, options }) => {
         const command: CommandJson = {
           type: ApplicationCommandType.ChatInput,
           name,
@@ -193,8 +217,8 @@ export function buildCommands(features: readonly Feature[] = allFeatures): Comma
           contexts: contextsOf([feature]),
           integration_types: integrationTypesOf([feature]),
         };
-        const options = optionsJson(feature.command!);
-        if (options) command.options = options;
+        const built = optionsJson(name, options);
+        if (built) command.options = built;
         return command;
       }));
 
@@ -221,8 +245,8 @@ export function buildCommands(features: readonly Feature[] = allFeatures): Comma
       contexts: contextsOf(members),
       integration_types: integrationTypesOf(members),
       options: members.flatMap(feature =>
-        namesOf(feature.command!).map(({ name, description: each }) =>
-          subcommandJson(feature.command!, name, each))),
+        namesOf(feature.command!).map(({ name, description: each, options }) =>
+          subcommandJson(name, each, options))),
     });
   }
 

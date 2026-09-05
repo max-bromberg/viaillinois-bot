@@ -56,6 +56,12 @@ export function memoryDeliveries(): Deliveries & { rows: () => Delivery[] } {
       }
     },
 
+    async abandon(deliveryId: number): Promise<void> {
+      for (const [key, row] of rows) {
+        if (row.deliveryId === deliveryId) rows.delete(key);
+      }
+    },
+
     async pending(): Promise<Delivery[]> {
       return [...rows.values()].filter(row => row.deliveredAt === null);
     },

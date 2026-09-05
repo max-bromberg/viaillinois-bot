@@ -74,6 +74,8 @@ describe('the exam reminders a person receives', () => {
     const delivery = recordingDelivery();
     const via = createFakeViaClient();
     via.clearMidterms();
+    via.seedLink(ADA);
+    via.seedLink(GRACE);
     return {
       feed, deliveries, delivery, via,
       job: createExamReminderJob({ feed, deliveries, via, deliver: delivery.deliver }),
@@ -87,6 +89,21 @@ describe('the exam reminders a person receives', () => {
   const AN_HOUR_BEFORE = hourOf('2026-09-10T23:00:00Z');
   /** The morning of the exam, which is well before an hour ahead of it. */
   const THAT_MORNING = hourOf('2026-09-10T14:00:00Z');
+
+  /**
+   * Section 10 of the design: the bot writes only to linked people. A course
+   * left behind by a link that went away would otherwise become a message
+   * nobody asked for.
+   */
+  it('writes to nobody the web platform no longer knows', async () => {
+    seedExam(stack.via);
+    await stack.feed.addCourse(ADA, 'ECE 385');
+    stack.via.removeLink(ADA);
+
+    const result = await stack.job.run(AN_HOUR_BEFORE);
+    expect(result.sent).toBe(0);
+    expect(stack.delivery.sent).toEqual([]);
+  });
 
   it('writes to everybody who added the course, at their own lead time', async () => {
     seedExam(stack.via);
@@ -197,9 +214,18 @@ describe('the exams a server posts', () => {
     const disable = createFeatureDisabler({ guilds, deliveries, sendDirectMessage: directMessages.send });
     const via = createFakeViaClient();
     via.clearMidterms();
+    /** The pauses the job took between servers, recorded rather than served. */
+    const spreads: number[] = [];
     return {
-      guilds, deliveries, actions, directMessages, disable, via,
-      job: createGuildExamsJob({ guilds, deliveries, actions, via, disable }),
+      guilds, deliveries, actions, directMessages, disable, via, spreads,
+      job: createGuildExamsJob({
+        guilds,
+        deliveries,
+        actions,
+        via,
+        disable,
+        sleep: async (milliseconds: number) => { spreads.push(milliseconds); },
+      }),
     };
   }
 

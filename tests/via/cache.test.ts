@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createFakeViaClient } from '../../src/via/fake.ts';
-import { withHotReadCache, HOT_READ_TTL_MS } from '../../src/via/cache.ts';
+import { withHotReadCache, HOT_READ_TTL_MS, MAX_CACHE_ENTRIES } from '../../src/via/cache.ts';
 
 /**
  * The hot read cache.
@@ -227,5 +227,89 @@ describe('caching the campus reads', () => {
     await client.getBuilding('ECEB');
     await client.getBuilding('ECEB');
     expect(via.calls.filter(call => call === 'getBuilding')).toHaveLength(2);
+  });
+});
+
+/**
+ * What the cache costs.
+ *
+ * The searches behind an autocomplete are keyed by what somebody typed, and
+ * anybody can type anything, so an unbounded map keyed that way is a map that
+ * one person can fill until the process runs out of memory. Each of them holds
+ * a bounded number of entries, the ones that have expired go first, and the
+ * one used longest ago goes after them.
+ */
+describe('the bound on what the cache holds', () => {
+  function cached(startAt = '2026-09-05T14:30:00Z') {
+    const via = createFakeViaClient();
+    let clock = new Date(startAt);
+    const client = withHotReadCache(via, { now: () => clock });
+    return {
+      via,
+      client,
+      advance: (milliseconds: number) => { clock = new Date(clock.getTime() + milliseconds); },
+    };
+  }
+
+  const searches = (via: { calls: string[] }) =>
+    via.calls.filter(call => call === 'searchCourses').length;
+
+  it('holds at most the entries it names', () => {
+    expect(MAX_CACHE_ENTRIES).toBe(500);
+  });
+
+  it('forgets the search used longest ago once it is full', async () => {
+    const { via, client } = cached();
+    for (let index = 0; index < MAX_CACHE_ENTRIES; index += 1) {
+      await client.searchCourses(`term ${index}`);
+    }
+    const asked = searches(via);
+    expect(asked).toBe(MAX_CACHE_ENTRIES);
+
+    // The very first search is still held, so it costs nothing.
+    await client.searchCourses('term 0');
+    expect(searches(via)).toBe(asked);
+
+    // One more search past the bound pushes out the one used longest ago,
+    // which by now is the second search rather than the first.
+    await client.searchCourses('one more');
+    expect(searches(via)).toBe(asked + 1);
+    await client.searchCourses('term 0');
+    expect(searches(via)).toBe(asked + 1);
+    await client.searchCourses('term 1');
+    expect(searches(via)).toBe(asked + 2);
+  });
+
+  it('sweeps the entries that have expired rather than counting them', async () => {
+    const { via, client, advance } = cached();
+    for (let index = 0; index < MAX_CACHE_ENTRIES; index += 1) {
+      await client.searchCourses(`term ${index}`);
+    }
+    advance(HOT_READ_TTL_MS + 1);
+
+    // Everything held has expired, so a search after the minute leaves the
+    // cache holding one entry rather than the bound.
+    await client.searchCourses('after the minute');
+    const asked = searches(via);
+    await client.searchCourses('after the minute');
+    expect(searches(via)).toBe(asked);
+  });
+
+  it('bounds the room searches, the listings and the exam listings as well', async () => {
+    const { via, client } = cached();
+    for (let index = 0; index < MAX_CACHE_ENTRIES + 10; index += 1) {
+      await client.searchLocations(`room ${index}`);
+      await client.listEvents({ limit: 5, offset: index });
+      await client.listMidterms({ course: `ECE ${index}` });
+    }
+
+    // Nothing here asserts a size, because the cache holds no reader for one.
+    // What it asserts is that the oldest of each kind has gone, which is what
+    // a bound means.
+    const before = via.calls.length;
+    await client.searchLocations('room 0');
+    await client.listEvents({ limit: 5, offset: 0 });
+    await client.listMidterms({ course: 'ECE 0' });
+    expect(via.calls.length).toBe(before + 3);
   });
 });

@@ -26,9 +26,11 @@ describe('the notices about an exam', () => {
     const deliveries = memoryDeliveries();
     const delivery = recordingDelivery();
     const via = createFakeViaClient();
+    via.seedLink(ADA);
+    via.seedLink(GRACE);
     return {
       feed, deliveries, delivery, via,
-      handlers: createMidtermHandlers({ feed, deliveries, deliver: delivery.deliver }),
+      handlers: createMidtermHandlers({ feed, deliveries, via, deliver: delivery.deliver }),
     };
   }
 
@@ -119,6 +121,20 @@ describe('the notices about an exam', () => {
     await stack.feed.addCourse(ADA, 'ECE 385');
     const entry = stack.via.seedOutbox('midterm.confirmed', { payload: {} });
 
+    await stack.handlers['midterm.confirmed']!(entry);
+    expect(stack.delivery.sent).toEqual([]);
+  });
+
+  /**
+   * Section 10 of the design: the bot writes only to linked people. A course
+   * left behind by a link that went away would otherwise become a message
+   * nobody asked for.
+   */
+  it('writes to nobody the web platform no longer knows', async () => {
+    await stack.feed.addCourse(ADA, 'ECE 385');
+    stack.via.removeLink(ADA);
+
+    const entry = stack.via.seedOutbox('midterm.confirmed');
     await stack.handlers['midterm.confirmed']!(entry);
     expect(stack.delivery.sent).toEqual([]);
   });

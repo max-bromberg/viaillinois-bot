@@ -32,7 +32,7 @@ export function reminderPurpose(eventId: number): string {
 export interface PersonalReminderJobOptions {
   feed: FeedStore;
   deliveries: Deliveries;
-  via: Pick<ViaClient, 'getEvent'>;
+  via: Pick<ViaClient, 'getEvent' | 'getLink'>;
   deliver: DirectMessageDelivery;
 }
 
@@ -81,13 +81,22 @@ export function createPersonalReminderJob(options: PersonalReminderJobOptions): 
             continue;
           }
 
+          // Section 10 of the design: the bot writes only to linked people.
+          // A reminder left behind by a link the bot never heard go away is
+          // forgotten rather than turned into a message nobody asked for.
+          if (!(await via.getLink(reminder.discordUserId))) {
+            await feed.removeReminder(reminder.reminderId);
+            result.dropped += 1;
+            continue;
+          }
+
           const intended = await deliveries.intend({
             outboxId: NO_OUTBOX_ENTRY,
             target: userTarget(reminder.discordUserId),
             purpose: reminderPurpose(reminder.eventId),
             kind: 'direct_message',
           });
-          if (!intended.isNew) {
+          if (!intended.isNew && intended.deliveredAt !== null) {
             await feed.removeReminder(reminder.reminderId);
             result.dropped += 1;
             continue;

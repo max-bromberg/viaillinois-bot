@@ -1,4 +1,5 @@
 import { NO_OUTBOX_ENTRY, channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { createSpread, type SpreadOptions } from '../delivery/spread.ts';
 import { channelFor, noChannelReason } from '../guilds/channels.ts';
 import { followedEvents } from '../announce/followedEvents.ts';
 import { campusToday, toInstant } from '../render/campusTime.ts';
@@ -32,7 +33,7 @@ export function dayOfPurpose(eventId: number): string {
   return `dayof:${eventId}`;
 }
 
-export interface DayOfReminderJobOptions {
+export interface DayOfReminderJobOptions extends SpreadOptions {
   guilds: GuildStore;
   deliveries: Deliveries;
   actions: DiscordActions;
@@ -55,6 +56,12 @@ export interface DayOfReminderJob {
 
 export function createDayOfReminderJob(options: DayOfReminderJobOptions): DayOfReminderJob {
   const { guilds, deliveries, actions, via, disable, websiteUrl } = options;
+  /**
+   * The pause between one server and the next, from section 9 of the design:
+   * the proactive jobs spread their posts rather than firing every server's
+   * in the same second.
+   */
+  const spread = createSpread(options);
 
   /** Whether the lead time has passed and the event has not started. */
   function isDue(event: ViaEvent, at: Date, leadMinutes: number): boolean {
@@ -70,9 +77,10 @@ export function createDayOfReminderJob(options: DayOfReminderJobOptions): DayOfR
       const result: DayOfReminderResult = { posted: 0, failed: 0 };
       const today = campusToday(hour.at);
 
-      for (const installation of await guilds.listInstallations()) {
+      for (const [index, installation] of (await guilds.listInstallations()).entries()) {
         const guildId = installation.guildId;
         try {
+          await spread(index);
           const channelId = await channelFor({ guilds, disable }, guildId, DAYOF_FEATURE, 'reminders');
           if (!channelId) continue;
 
@@ -90,13 +98,19 @@ export function createDayOfReminderJob(options: DayOfReminderJobOptions): DayOfR
               purpose: dayOfPurpose(event.eventId),
               kind: 'message',
             });
-            if (!intended.isNew) continue;
+            // A row that carries the moment it was posted is a reminder
+            // that has been posted, and a row that carries none is one that
+            // is still owed.
+            if (!intended.isNew && intended.deliveredAt !== null) continue;
 
             let messageId: string;
             try {
               messageId = await actions.postMessage(channelId, renderDayOfReminder(event, { websiteUrl }));
             } catch (err) {
               if (!isMissingAccess(err)) throw err;
+              // There is nowhere left to post, so the intention goes with the
+              // feature rather than staying owed for ever.
+              await deliveries.abandon(intended.deliveryId);
               await disable.disable(guildId, DAYOF_FEATURE, noChannelReason('reminders'));
               break;
             }

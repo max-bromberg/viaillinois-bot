@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   roomsCommand, courseCommand, buildingCommand,
-  NOT_A_BUILDING_MESSAGE, NO_SUCH_BUILDING_MESSAGE,
+  NOT_A_BUILDING_MESSAGE, noSuchBuildingMessage,
 } from '../../src/commands/campus.ts';
 import { NO_SUCH_COURSE_MESSAGE } from '../../src/commands/midterms.ts';
 import { interaction, testContext, type TestContext } from './support.ts';
@@ -179,9 +179,17 @@ describe('looking a building up', () => {
     expect(reply.content).toContain('306 N Wright St');
   });
 
-  it('says so when VIA does not know the code', async () => {
+  /**
+   * The codes the option completes from are the bot's own list, so the bot
+   * can complete a code the web platform turns out to have no record of. The
+   * answer says that VIA has no record of it rather than telling the person to
+   * choose from the list they just chose from.
+   */
+  it('says VIA has no record of the code, naming what was asked for', async () => {
     const reply = await buildingCommand.run(asAda({ options: { building: 'ZZZ' } }), ctx.context);
-    expect(reply.content).toBe(NO_SUCH_BUILDING_MESSAGE);
+    expect(reply.content).toBe(noSuchBuildingMessage('ZZZ'));
+    expect(reply.content).toContain('ZZZ');
+    expect(reply.content).not.toContain('Please choose');
   });
 
   it('asks for a building when the command was run without one', async () => {

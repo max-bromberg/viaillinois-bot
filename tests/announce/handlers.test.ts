@@ -3,10 +3,13 @@ import { createAnnouncementHandlers } from '../../src/announce/handlers.ts';
 import { createScheduledEventMirror } from '../../src/mirror/scheduledEvents.ts';
 import { createFeatureDisabler } from '../../src/guilds/disable.ts';
 import { createFakeViaClient } from '../../src/via/fake.ts';
+import { POST_SPREAD_MS } from '../../src/delivery/spread.ts';
 import { memoryGuildStore } from '../commands/support.ts';
 import {
-  memoryDeliveries, memoryEventMirrors, recordingActions, recordingDirectMessages,
+  memoryDeliveries, memoryEventMirrors, recordingActions, recordingDelivery,
+  recordingDirectMessages,
 } from '../support/proactive.ts';
+import { memoryFeedStore } from '../support/feed.ts';
 import type { RecordedAction } from '../support/proactive.ts';
 import type { GuildStore } from '../../src/guilds/store.ts';
 import type { OutboxEntry, ViaEvent } from '../../src/via/client.ts';
@@ -122,7 +125,11 @@ async function built(options: { withMirror?: boolean } = {}) {
   const actions = recordingActions();
   const directMessages = recordingDirectMessages();
   const via = createFakeViaClient();
+  const feed = memoryFeedStore();
+  const delivery = recordingDelivery();
   const disable = createFeatureDisabler({ guilds, deliveries, sendDirectMessage: directMessages.send });
+  /** The pauses the handlers took between servers, recorded rather than served. */
+  const spreads: number[] = [];
 
   const mirror = createScheduledEventMirror({
     guilds, mirrors, deliveries, actions, via, disable, now: () => NOW,
@@ -136,13 +143,19 @@ async function built(options: { withMirror?: boolean } = {}) {
     deliveries,
     actions,
     via,
+    feed,
+    deliver: delivery.deliver,
     disable,
     websiteUrl: 'https://viaillinois.com',
     thisWeek: thisWeek.message,
+    sleep: async (milliseconds: number) => { spreads.push(milliseconds); },
     ...(options.withMirror === false ? {} : { mirror }),
   });
 
-  return { guilds, mirrors, deliveries, actions, directMessages, via, mirror, handlers, thisWeek };
+  return {
+    guilds, mirrors, deliveries, actions, directMessages, via, feed, delivery, mirror, handlers,
+    thisWeek, spreads,
+  };
 }
 
 /** An outbox entry of a kind, carrying the event or series a test names. */
@@ -200,6 +213,17 @@ describe('which servers hear about a new event', () => {
     await server(helpers.guilds, { guildId: OTHER_RSO_SERVER, binding: 'rso', rsoId: 9 });
     return helpers;
   }
+
+  /**
+   * Section 9 of the design: the proactive posts are spread rather than fired
+   * in the same second. One event created on the website reaches every server
+   * that follows the organization, and three of these four do.
+   */
+  it('pauses between one server and the next, and not before the first', async () => {
+    const { handlers, spreads } = await everyKindOfServer();
+    await handlers['event.created']!(entryOf('event.created', { event: payloadEvent() }));
+    expect(spreads).toEqual([POST_SPREAD_MS, POST_SPREAD_MS]);
+  });
 
   it('announces once in the server bound to the organization', async () => {
     const { handlers, actions } = await everyKindOfServer();
@@ -506,6 +530,56 @@ describe('a server that unbound its announcements channel', () => {
   });
 });
 
+/**
+ * A delivery row that was written and never posted says the announcement is
+ * still owed, so the entry handled again posts it. Discord refusing once must
+ * not cost a server the announcement for good, which is what a row read as
+ * though the post had been made would have done.
+ */
+describe('an announcement that Discord would not take the first time', () => {
+  async function withOneServer() {
+    const helpers = await built();
+    await server(helpers.guilds, { guildId: RSO_SERVER, binding: 'rso', rsoId: 1 });
+    return helpers;
+  }
+
+  it('posts the announcement when the entry is handled again', async () => {
+    const { handlers, actions, mirrors } = await withOneServer();
+    const entry = entryOf('event.created', { event: payloadEvent() });
+
+    actions.failNextWith(new Error('Discord did not answer.'));
+    await expect(handlers['event.created']!(entry)).rejects.toThrow('Discord did not answer.');
+    expect(posts(actions)).toEqual([]);
+
+    await handlers['event.created']!(entry);
+    expect(posts(actions)).toHaveLength(1);
+    expect((await mirrors.get(RSO_SERVER, 10))!.announcementMessageId).not.toBe(null);
+  });
+
+  it('posts it once and no more once it has been posted', async () => {
+    const { handlers, actions } = await withOneServer();
+    const entry = entryOf('event.created', { event: payloadEvent() });
+
+    actions.failNextWith(new Error('Discord did not answer.'));
+    await expect(handlers['event.created']!(entry)).rejects.toThrow('Discord did not answer.');
+    await handlers['event.created']!(entry);
+    await handlers['event.created']!(entry);
+    expect(posts(actions)).toHaveLength(1);
+  });
+
+  /**
+   * A channel that has gone is not a post that is owed. The delivery row goes
+   * with the feature, so nothing is left saying the bot still has a post to
+   * make into a channel it can no longer reach.
+   */
+  it('leaves nothing owed when the channel has gone for good', async () => {
+    const { handlers, actions, deliveries } = await withOneServer();
+    actions.failNextWith(Object.assign(new Error('Missing Access'), { code: 50001 }));
+    await handlers['event.created']!(entryOf('event.created', { event: payloadEvent() }));
+    expect(await deliveries.pending()).toEqual([]);
+  });
+});
+
 describe('keeping the Events tab in step with the outbox', () => {
   async function mirroring() {
     const helpers = await built();
@@ -590,5 +664,149 @@ describe('keeping the this week message current', () => {
     await handlers['event.created']!(entryOf('event.created', { event: payloadEvent() }));
     await handlers['event.deleted']!(entryOf('event.deleted', { event: payloadEvent() }, { outboxId: 2 }));
     expect(thisWeek.refreshed).toEqual([RSO_SERVER, RSO_SERVER]);
+  });
+});
+
+/**
+ * An event an organization has just marked internal.
+ *
+ * An announcements channel is read by the whole server, and an internal event
+ * is for the members of one organization. An event that was public when it was
+ * announced and is internal now leaves an announcement behind, and re-drawing
+ * the card would leave its title, its room and its description in a channel
+ * the organization has just said they do not belong in.
+ */
+describe('an event that has become internal', () => {
+  const becameInternal = (outboxId = 7) => entryOf('event.updated', {
+    event: payloadEvent({ isPrivate: true }),
+    changed: ['is_private'],
+  }, { outboxId });
+
+  async function announced() {
+    const helpers = await built();
+    await server(helpers.guilds, { guildId: RSO_SERVER, binding: 'rso', rsoId: 1 });
+    await helpers.handlers['event.created']!(entryOf('event.created', { event: payloadEvent() }));
+    return helpers;
+  }
+
+  it('replaces what the announcement said with one sentence', async () => {
+    const { handlers, actions } = await announced();
+    await handlers['event.updated']!(becameInternal());
+
+    const edited = edits(actions);
+    expect(edited).toHaveLength(1);
+    expect(edited[0]!.reply!.content)
+      .toBe('This event is now internal to its organization, so it is no longer announced here.');
+    expect(edited[0]!.reply!.components ?? []).toEqual([]);
+  });
+
+  it('leaves nothing of the event in the channel it was announced in', async () => {
+    const { handlers, actions } = await announced();
+    await handlers['event.updated']!(becameInternal());
+
+    const content = edits(actions)[0]!.reply!.content;
+    expect(content).not.toContain('General meeting');
+    expect(content).not.toContain('Bring a laptop.');
+    expect(content).not.toContain('1002');
+  });
+
+  it('still draws the card for an event that is public', async () => {
+    const { handlers, actions } = await announced();
+    await handlers['event.updated']!(entryOf('event.updated', {
+      event: payloadEvent({ startTime: '2026-09-11T18:00:00-05:00' }),
+      changed: ['start_time'],
+    }, { outboxId: 8 }));
+    expect(edits(actions)[0]!.reply!.content).toContain('General meeting');
+  });
+});
+
+/**
+ * Telling the people who asked to be reminded that an event was cancelled.
+ *
+ * The cancellation command says that the people who asked to be reminded are
+ * told, and section 6.3 of the design has a change reach everybody who was
+ * told about the event in the first place. A reminder that stays for an event
+ * that is not happening is worse than no reminder at all, so the reminders go
+ * once the message has been sent.
+ */
+describe('the people holding a reminder for an event that was cancelled', () => {
+  const ADA = '204255221017214977';
+  const GRACE = '204255221017214978';
+
+  const cancellation = (outboxId = 5) => entryOf('event.cancelled', {
+    event: payloadEvent({ cancelledAt: '2026-09-05T12:00:00-05:00' }),
+  }, { outboxId });
+
+  async function withReminders() {
+    const helpers = await built();
+    await server(helpers.guilds, { guildId: RSO_SERVER, binding: 'rso', rsoId: 1 });
+    helpers.via.seedLink(ADA);
+    helpers.via.seedLink(GRACE);
+    await helpers.feed.addReminder(ADA, 10, '2026-09-10 17:00:00');
+    await helpers.feed.addReminder(GRACE, 10, '2026-09-10 17:00:00');
+    return helpers;
+  }
+
+  it('writes to each of them once, naming the event', async () => {
+    const { handlers, delivery } = await withReminders();
+    await handlers['event.cancelled']!(cancellation());
+
+    expect(delivery.sent.map(one => one.discordUserId).sort()).toEqual([ADA, GRACE]);
+    expect(delivery.sent[0]!.reply.content).toContain('General meeting');
+    expect(delivery.sent[0]!.reply.content).toContain('cancelled');
+  });
+
+  it('writes once however many times the entry is handled', async () => {
+    const { handlers, delivery } = await withReminders();
+    await handlers['event.cancelled']!(cancellation());
+    await handlers['event.cancelled']!(cancellation());
+    expect(delivery.sent).toHaveLength(2);
+  });
+
+  it('removes the reminder, because there is nothing left to be reminded of', async () => {
+    const { handlers, feed } = await withReminders();
+    await handlers['event.cancelled']!(cancellation());
+    expect(await feed.listReminders(ADA)).toEqual([]);
+    expect(await feed.listReminders(GRACE)).toEqual([]);
+  });
+
+  it('writes to nobody who turned direct messages off, and still removes their reminder', async () => {
+    const { handlers, feed, delivery } = await withReminders();
+    await feed.savePreferences(ADA, { directMessageOptOut: true });
+
+    await handlers['event.cancelled']!(cancellation());
+    expect(delivery.sent.map(one => one.discordUserId)).toEqual([GRACE]);
+    expect(await feed.listReminders(ADA)).toEqual([]);
+  });
+
+  it('writes to nobody the web platform no longer knows', async () => {
+    const { handlers, via, feed, delivery } = await withReminders();
+    via.removeLink(ADA);
+
+    await handlers['event.cancelled']!(cancellation());
+    expect(delivery.sent.map(one => one.discordUserId)).toEqual([GRACE]);
+    expect(await feed.listReminders(ADA)).toEqual([]);
+  });
+
+  /**
+   * A message Discord would not take is still owed, so the delivery row stays
+   * pending, the reminder stays where it is, and the entry is asked for again.
+   */
+  it('asks for the entry again when one of the messages could not be sent', async () => {
+    const { handlers, feed, deliveries, delivery } = await withReminders();
+    delivery.failNext();
+
+    await expect(handlers['event.cancelled']!(cancellation())).rejects.toThrow();
+    expect(await feed.listReminders(ADA)).toHaveLength(1);
+    expect((await deliveries.pending()).some(row => row.kind === 'direct_message')).toBe(true);
+  });
+
+  it('writes to nobody about an event that was moved rather than cancelled', async () => {
+    const { handlers, delivery } = await withReminders();
+    await handlers['event.updated']!(entryOf('event.updated', {
+      event: payloadEvent({ startTime: '2026-09-11T18:00:00-05:00' }),
+      changed: ['start_time'],
+    }, { outboxId: 6 }));
+    expect(delivery.sent).toEqual([]);
   });
 });

@@ -748,11 +748,41 @@ export function parseOutboxEntry(body: unknown): OutboxEntry {
   };
 }
 
+/**
+ * A whole number an outbox page carries, or null when what arrived is not one.
+ *
+ * The identifier of an entry is what the cursor is set to once that entry has
+ * been handled, so an identifier that is not a whole number would leave the
+ * cursor holding something no comparison is true of, and every entry after it
+ * would be read for ever or never again.
+ */
+function outboxNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const read = Number(value);
+  return Number.isSafeInteger(read) && read >= 0 ? read : null;
+}
+
 export function parseOutboxPage(body: unknown): OutboxPage {
   const raw = body as Record<string, unknown>;
-  const entries = Array.isArray(raw.entries) ? raw.entries.map(parseOutboxEntry) : [];
-  const next = raw.next_after;
-  return { entries, nextAfter: next === null || next === undefined ? null : Number(next) };
+  const given = Array.isArray(raw.entries) ? raw.entries : [];
+
+  const entries: OutboxEntry[] = [];
+  for (const one of given) {
+    const outboxId = outboxNumber((one as Record<string, unknown>)?.outbox_id);
+    if (outboxId === null) {
+      // Loud, because this is the web platform sending a shape the contract
+      // says it never sends, and quietly dropping it would leave nobody with
+      // anything to look at.
+      console.error(
+        'the outbox sent an entry whose identifier is not a whole number, so it has been left out:',
+        JSON.stringify((one as Record<string, unknown>)?.outbox_id ?? null),
+      );
+      continue;
+    }
+    entries.push(parseOutboxEntry(one));
+  }
+
+  return { entries, nextAfter: outboxNumber(raw.next_after) };
 }
 
 /**

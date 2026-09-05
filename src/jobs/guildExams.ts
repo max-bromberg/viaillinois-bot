@@ -1,4 +1,5 @@
 import { NO_OUTBOX_ENTRY, channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { createSpread, type SpreadOptions } from '../delivery/spread.ts';
 import { channelFor, noChannelReason } from '../guilds/channels.ts';
 import { campusDatePlus } from '../render/campusTime.ts';
 import { renderExamsThisWeek } from '../render/campus.ts';
@@ -38,7 +39,7 @@ export function guildExamsPurpose(weekStart: string): string {
   return `exams:${weekStart}`;
 }
 
-export interface GuildExamsJobOptions {
+export interface GuildExamsJobOptions extends SpreadOptions {
   guilds: GuildStore;
   deliveries: Deliveries;
   actions: DiscordActions;
@@ -61,6 +62,12 @@ export interface GuildExamsJob {
 
 export function createGuildExamsJob(options: GuildExamsJobOptions): GuildExamsJob {
   const { guilds, deliveries, actions, via, disable } = options;
+  /**
+   * The pause between one server and the next, from section 9 of the design:
+   * the proactive jobs spread their posts rather than firing every server's
+   * in the same second.
+   */
+  const spread = createSpread(options);
 
   return {
     async run(hour: JobHour): Promise<GuildExamsResult> {
@@ -82,9 +89,10 @@ export function createGuildExamsJob(options: GuildExamsJobOptions): GuildExamsJo
         return week;
       };
 
-      for (const installation of due) {
+      for (const [index, installation] of due.entries()) {
         const guildId = installation.guildId;
         try {
+          await spread(index);
           const channelId = await channelFor({ guilds, disable }, guildId, EXAMS_FEATURE, 'exams');
           if (!channelId) continue;
 
@@ -94,7 +102,10 @@ export function createGuildExamsJob(options: GuildExamsJobOptions): GuildExamsJo
             purpose: guildExamsPurpose(hour.day),
             kind: 'message',
           });
-          if (!intended.isNew) {
+          // A row that carries the moment it was posted is a message that
+          // has been posted, and a row that carries none is one that is still
+          // owed.
+          if (!intended.isNew && intended.deliveredAt !== null) {
             result.skipped += 1;
             continue;
           }
@@ -110,7 +121,9 @@ export function createGuildExamsJob(options: GuildExamsJobOptions): GuildExamsJo
           } catch (err) {
             if (!isMissingAccess(err)) throw err;
             // The channel the server bound has been deleted or closed to the
-            // bot, which is the same fault as unbinding it.
+            // bot, which is the same fault as unbinding it. The intention
+            // goes with the feature, because there is nowhere left to post.
+            await deliveries.abandon(intended.deliveryId);
             await disable.disable(guildId, EXAMS_FEATURE, noChannelReason('exams'));
             continue;
           }

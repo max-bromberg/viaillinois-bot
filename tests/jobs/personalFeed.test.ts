@@ -90,6 +90,8 @@ describe('the personal digest', () => {
     delivery = recordingDelivery();
     via = createFakeViaClient();
     seedWeek(via);
+    via.seedLink(ADA);
+    via.seedLink(GRACE);
   });
 
   it('sends the coming week to somebody whose day and hour this is', async () => {
@@ -205,6 +207,39 @@ describe('the personal digest', () => {
     expect(result.sent).toBe(1);
     expect(result.failed).toBe(1);
   });
+
+  /**
+   * A delivery row that was written and never posted says the message is
+   * still owed, so the next pass over the same hour sends it. A row that
+   * carries the moment it was posted is the one that says there is nothing
+   * left to do.
+   */
+  /**
+   * Section 10 of the design: the bot writes only to linked people. A row
+   * left behind by a link that went away without the bot hearing about it
+   * would otherwise become a message nobody asked for.
+   */
+  it('writes to nobody the web platform no longer knows', async () => {
+    await feed.follow(ADA, 3);
+    via.removeLink(ADA);
+
+    const result = await built().run(SUNDAY_EVENING);
+    expect(result.sent).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(delivery.sent).toEqual([]);
+  });
+
+  it('sends a digest that was owed when the hour is run again', async () => {
+    await feed.follow(ADA, 3);
+    delivery.failNext();
+    await built().run(SUNDAY_EVENING);
+    expect(delivery.sent).toEqual([]);
+
+    const result = await built().run(SUNDAY_EVENING);
+    expect(result.sent).toBe(1);
+    expect(delivery.sent).toHaveLength(1);
+    expect(await deliveries.pending()).toEqual([]);
+  });
 });
 
 describe('the personal reminders', () => {
@@ -226,6 +261,8 @@ describe('the personal reminders', () => {
     delivery = recordingDelivery();
     via = createFakeViaClient();
     seedWeek(via);
+    via.seedLink(ADA);
+    via.seedLink(GRACE);
   });
 
   it('sends a reminder that has come due, naming the event and where it is', async () => {
@@ -337,5 +374,20 @@ describe('the personal reminders', () => {
     const result = await built().run(AN_HOUR_BEFORE);
     expect(result.sent).toBe(1);
     expect(result.failed).toBe(1);
+  });
+
+  /**
+   * Section 10 of the design: the bot writes only to linked people. A
+   * reminder left behind by a link that went away is forgotten rather than
+   * turned into a message nobody asked for.
+   */
+  it('writes to nobody the web platform no longer knows', async () => {
+    await feed.addReminder(ADA, 10, '2026-09-07 17:00:00');
+    via.removeLink(ADA);
+
+    const result = await built().run(AN_HOUR_BEFORE);
+    expect(delivery.sent).toEqual([]);
+    expect(result.dropped).toBe(1);
+    expect(await feed.listReminders(ADA)).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import { NO_OUTBOX_ENTRY, channelTarget, type Deliveries } from '../delivery/deliveries.ts';
+import { createSpread, type SpreadOptions } from '../delivery/spread.ts';
 import { channelFor, noChannelReason } from '../guilds/channels.ts';
-import { followedEvents } from './followedEvents.ts';
+import { followedEvents, WEEK_LISTING_LIMIT } from './followedEvents.ts';
 import { campusDatePlus, campusToday } from '../render/campusTime.ts';
 import { campusWeekStart } from '../jobs/clock.ts';
 import { renderThisWeek } from '../render/digest.ts';
@@ -39,7 +40,7 @@ export const THISWEEK_FEATURE = 'living.thisweek';
  */
 export const THISWEEK_PURPOSE = 'thisweek';
 
-export interface ThisWeekOptions {
+export interface ThisWeekOptions extends SpreadOptions {
   guilds: GuildStore;
   deliveries: Deliveries;
   actions: DiscordActions;
@@ -68,6 +69,12 @@ export interface ThisWeekMessage {
 
 export function createThisWeekMessage(options: ThisWeekOptions): ThisWeekMessage {
   const { guilds, deliveries, actions, via, disable } = options;
+  /**
+   * The pause between one server and the next, from section 9 of the design:
+   * the proactive jobs spread their posts rather than firing every server's
+   * in the same second.
+   */
+  const spread = createSpread(options);
 
   /**
    * The week as it stands now: everything still to come between today and the
@@ -80,6 +87,7 @@ export function createThisWeekMessage(options: ThisWeekOptions): ThisWeekMessage
     const events = await followedEvents({ guilds, via }, installation, {
       from: campusToday(at),
       to: campusDatePlus(6, new Date(`${weekStart}T12:00:00Z`)),
+      limit: WEEK_LISTING_LIMIT,
     });
     return renderThisWeek({ weekStart, events, updatedAt: at });
   }
@@ -98,7 +106,7 @@ export function createThisWeekMessage(options: ThisWeekOptions): ThisWeekMessage
       kind: 'message',
     });
 
-    if (!intended.isNew) {
+    if (!intended.isNew && intended.deliveredAt !== null) {
       // The message was posted and the row that says where was not written,
       // which is the crash this delivery row exists to survive.
       if (intended.messageId) {
@@ -115,6 +123,9 @@ export function createThisWeekMessage(options: ThisWeekOptions): ThisWeekMessage
       messageId = await actions.postMessage(channelId, await weekOf(installation, at));
     } catch (err) {
       if (!isMissingAccess(err)) throw err;
+      // There is nowhere left to post, so the intention goes with the feature
+      // rather than staying owed for ever.
+      await deliveries.abandon(intended.deliveryId);
       await disable.disable(guildId, THISWEEK_FEATURE, noChannelReason('thisweek'));
       return false;
     }
@@ -199,8 +210,9 @@ export function createThisWeekMessage(options: ThisWeekOptions): ThisWeekMessage
   ): Promise<ThisWeekResult> {
     const result: ThisWeekResult = { posted: 0, updated: 0, failed: 0 };
 
-    for (const installation of installations) {
+    for (const [index, installation] of installations.entries()) {
       try {
+        await spread(index);
         const had = await guilds.getGuildMessage(installation.guildId, 'thisweek');
         if (await refresh(installation, at)) {
           if (had) result.updated += 1;

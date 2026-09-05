@@ -106,6 +106,13 @@ export function memoryFeedStore(): FeedStore & { preferenceRows: () => FeedPrefe
         .map(one => ({ ...one }));
     },
 
+    async remindersForEvent(eventId: number): Promise<ReminderRow[]> {
+      return reminders
+        .filter(one => one.eventId === eventId)
+        .map(one => ({ ...one }))
+        .sort((left, right) => left.reminderId - right.reminderId);
+    },
+
     async outstandingReminders(): Promise<ReminderRow[]> {
       return reminders
         .slice()
@@ -179,6 +186,10 @@ export function memoryInterestMarks(): InterestMarks {
 
     async unmark(eventId: number, discordUserId: string): Promise<boolean> {
       return rows.delete(key(eventId, discordUserId));
+    },
+
+    async hasMark(eventId: number, discordUserId: string): Promise<boolean> {
+      return rows.has(key(eventId, discordUserId));
     },
 
     async listPeople(eventId: number): Promise<string[]> {

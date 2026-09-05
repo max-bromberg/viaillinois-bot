@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponent, rsoComponent }
-  from '../../src/commands/events.ts';
+import {
+  eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponent, rsoComponent,
+  decodeListing, noLongerInterestedMessage,
+} from '../../src/commands/events.ts';
 import { PAGE_SIZE } from '../../src/render/eventList.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
 import { interaction, testContext } from './support.ts';
@@ -36,8 +38,14 @@ describe('the events command', () => {
     expect(reply.content).toContain('Thu, Sep 10 at 6:00 PM');
   });
 
-  it('answers only the person who asked', () => {
-    expect(eventsCommand.ephemeral).toBe(true);
+  /**
+   * A student asking what is coming up in a server that invited the bot is
+   * asking a question the channel around them has too, so the answer goes to
+   * the channel. In a server that did not invite the bot, the dispatcher
+   * answers only the person who asked, whatever this says.
+   */
+  it('answers the channel it was asked in', () => {
+    expect(eventsCommand.ephemeral).toBe(false);
   });
 
   it('asks the web platform for the window the person chose', async () => {
@@ -149,6 +157,62 @@ describe('the events command', () => {
     expect(labelsOf(reply)).toContain('Add to calendar');
   });
 
+  /**
+   * A card opened from a listing replaces the listing, because it is the same
+   * message edited in place, so the way back has to be on the card. The button
+   * carries the listing the row came from, which is the same identifier the
+   * page control carries.
+   */
+  it('offers the way back to the listing the card was opened from', async () => {
+    const { context } = testContext();
+    const listing = await eventsCommand.run(ask({ window: 'thismonth' }), context);
+    const open = (listing.components ?? [])[0]!.components[0] as { customId: string };
+
+    const card = await eventsComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: open.customId }),
+      context,
+    );
+    expect(labelsOf(card)).toContain('Back to the list');
+
+    const back = (card.components ?? []).flatMap(row => row.components)
+      .find(one => one.kind === 'button' && one.label === 'Back to the list') as { customId: string };
+    expect(decodeListing(back.customId)).toEqual({
+      rsoId: null, window: 'thismonth', includeInternal: false, offset: 0,
+    });
+
+    const again = await eventsComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: back.customId }),
+      context,
+    );
+    expect(again.content).toContain('Coming up across ECE, this month.');
+  });
+
+  it('offers no way back on a card opened by a button that named no listing', async () => {
+    const { context } = testContext();
+    const reply = await eventsComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: 'events:open:10' }),
+      context,
+    );
+    expect(labelsOf(reply)).not.toContain('Back to the list');
+  });
+
+  /**
+   * A board member reading a listing is one press away from the actions on
+   * one of its events, exactly as they are from an announcement, because the
+   * card that opens is private to whoever pressed the button.
+   */
+  it('offers the way into the board actions on a card opened from a listing', async () => {
+    const { context } = testContext();
+    const listing = await eventsCommand.run(ask(), context);
+    const open = (listing.components ?? [])[0]!.components[0] as { customId: string };
+
+    const card = await eventsComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: open.customId }),
+      context,
+    );
+    expect(labelsOf(card)).toContain('Manage this event');
+  });
+
   it('completes organization names as a person types', async () => {
     const { context, via } = testContext();
     via.seedRso({ rsoId: 9, name: 'HKN' });
@@ -187,6 +251,12 @@ describe('the event command', () => {
     const reply = await eventCommand.run(ask('10'), context);
     expect(reply.content).toContain('General meeting');
     expect(reply.content).toContain('Electrical & Computer Eng Bldg 1002');
+  });
+
+  it('offers the way into the board actions, which the card opens privately', async () => {
+    const { context } = testContext();
+    const reply = await eventCommand.run(ask('10'), context);
+    expect(labelsOf(reply)).toContain('Manage this event');
   });
 
   it('says so in a sentence for an event that is not there', async () => {
@@ -332,11 +402,17 @@ describe('the buttons on the event card', () => {
     expect(reply.content).toContain('General meeting');
   });
 
-  it('counts one person once, however many times they press it', async () => {
+  /**
+   * The count is the web platform's own, so one person marking, taking it
+   * back and marking again leaves the same count they started with rather
+   * than three of them.
+   */
+  it('counts one person once, whichever way they press it', async () => {
     const { context, via } = testContext();
     via.seedLink(ROSA);
     via.seedEvent({ eventId: 10, interestCount: 3 });
 
+    await eventComponent.run(press('event:interested:10'), context);
     await eventComponent.run(press('event:interested:10'), context);
     const reply = await eventComponent.run(press('event:interested:10'), context);
     expect(reply.content).toContain('4');
@@ -408,5 +484,56 @@ describe('the organization command', () => {
       context,
     );
     expect(labelsOf(reply)).toContain('Link my account');
+  });
+});
+
+/**
+ * Taking back an interest mark.
+ *
+ * The Interested button is the same shape as the Remind me button beside it:
+ * pressing it once marks the person, and pressing it again takes the mark
+ * back. Anything else leaves somebody who pressed it by mistake with no way
+ * out of the count a board reads.
+ */
+describe('taking back an interest mark', () => {
+  const press = (customId: string, overrides: Partial<Interaction> = {}) =>
+    interaction({ kind: 'button', commandName: null, customId, ...overrides });
+
+  function withMarks() {
+    const started = testContext();
+    started.via.seedLink(ROSA);
+    started.via.seedEvent({ eventId: 10, title: 'General meeting', interestCount: 3 });
+    started.context.interestMarks = memoryInterestMarks();
+    return started;
+  }
+
+  it('takes the mark back on VIA when the button is pressed a second time', async () => {
+    const { context, via } = withMarks();
+    await eventComponent.run(press('event:interested:10'), context);
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+
+    expect(via.interests).toEqual([
+      { eventId: 10, interested: true, actingDiscordUserId: ROSA },
+      { eventId: 10, interested: false, actingDiscordUserId: ROSA },
+    ]);
+    expect(reply.content).toBe(noLongerInterestedMessage('General meeting'));
+  });
+
+  it('forgets the mark it wrote down, so the morning after asks nobody', async () => {
+    const { context } = withMarks();
+    await eventComponent.run(press('event:interested:10'), context);
+    await eventComponent.run(press('event:interested:10'), context);
+    expect(await context.interestMarks!.listPeople(10)).toEqual([]);
+  });
+
+  it('marks the person again when the button is pressed a third time', async () => {
+    const { context, via } = withMarks();
+    await eventComponent.run(press('event:interested:10'), context);
+    await eventComponent.run(press('event:interested:10'), context);
+    const reply = await eventComponent.run(press('event:interested:10'), context);
+
+    expect(via.interests).toHaveLength(3);
+    expect(via.interests[2]!.interested).toBe(true);
+    expect(reply.content).toContain('interested in General meeting');
   });
 });

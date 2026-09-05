@@ -4,6 +4,7 @@ import { outboxMidterm, type Midterm, type OutboxEntry } from '../via/client.ts'
 import type { DirectMessageDelivery } from '../discord/directMessages.ts';
 import type { FeedStore } from '../feed/store.ts';
 import type { OutboxHandlers } from '../outbox/consumer.ts';
+import type { ViaClient } from '../via/client.ts';
 
 /**
  * What the bot writes when the outbox says an exam was confirmed, changed or
@@ -30,10 +31,12 @@ export interface MidtermHandlerOptions {
   feed: FeedStore;
   deliveries: Deliveries;
   deliver: DirectMessageDelivery;
+  /** The web platform, asked who is still linked before anybody is written to. */
+  via: Pick<ViaClient, 'getLink'>;
 }
 
 export function createMidtermHandlers(options: MidtermHandlerOptions): OutboxHandlers {
-  const { feed, deliveries, deliver } = options;
+  const { feed, deliveries, deliver, via } = options;
 
   /** Tell everybody who added the course, once each. */
   async function tellFollowers(entry: OutboxEntry, midterm: Midterm): Promise<void> {
@@ -43,13 +46,20 @@ export function createMidtermHandlers(options: MidtermHandlerOptions): OutboxHan
       const preferences = await feed.preferences(discordUserId);
       if (preferences.directMessageOptOut) continue;
 
+      // Section 10 of the design: the bot writes only to linked people. A
+      // course left behind by a link the bot never heard go away would
+      // otherwise become a message nobody asked for.
+      if (!(await via.getLink(discordUserId))) continue;
+
       const intended = await deliveries.intend({
         outboxId: entry.outboxId,
         target: userTarget(discordUserId),
         purpose: entry.kind,
         kind: 'direct_message',
       });
-      if (!intended.isNew) continue;
+      // A row that carries the moment it was posted is a message that has
+      // arrived, and a row that carries none is one that is still owed.
+      if (!intended.isNew && intended.deliveredAt !== null) continue;
 
       const outcome = await deliver(discordUserId, {
         content: renderMidtermNotice(entry.kind, midterm),

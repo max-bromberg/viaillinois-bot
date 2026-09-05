@@ -43,18 +43,35 @@ export interface Proposal {
   /** The last date the repeat runs on, or empty for a search over one week. */
   until: string;
   /**
-   * What the scheduler scored this evening when the message was written. It is
-   * carried so that accepting can tell an evening that still stands from one
-   * the scheduler now thinks less of, which is what a board reading a day old
-   * poll result needs to be told before a term of meetings is created.
+   * What the scheduler scored this evening when the message was written,
+   * rounded to a whole number.
+   *
+   * It is carried so that accepting can tell an evening that still stands from
+   * one the scheduler now thinks less of, which is what a board reading a day
+   * old poll result needs to be told before a term of meetings is created. It
+   * is rounded because an identifier is a string of digits: a score of 87.5
+   * written in full is read back as nothing at all, which would be an Accept
+   * button that never works.
    */
   score: number;
 }
 
-/** What the two prefixes are, which is also how a handler tells them apart. */
+/** What the prefixes are, which is also how a handler tells them apart. */
 export const POLL_PREFIX = 'sched:poll:';
 export const POLL_IN_PREFIX = 'sched:pollin:';
 export const TAKE_PREFIX = 'sched:take:';
+
+/**
+ * The button that opens the form asking what the repeat is called, and the
+ * form itself.
+ *
+ * It carries the same evening the accept button carried, and it is a prefix of
+ * its own because Discord takes a form only as the first thing said about an
+ * interaction: accepting checks the recommendation again, which is a call to
+ * the web platform and does not belong inside the three seconds a form has,
+ * and opening the form has nothing behind it at all.
+ */
+export const NAME_PREFIX = 'sched:name:';
 
 const SPANS: readonly string[] = ['week', 'term'];
 
@@ -85,21 +102,38 @@ export function decodeAsk(text: string): ScheduleAsk | null {
 const START_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** One evening, written into the identifier of the button that accepts it. */
-export function encodeProposal(proposal: Proposal): string {
-  return TAKE_PREFIX + [
+/** The evening itself, without the prefix that says which button carries it. */
+function encodeBody(proposal: Proposal): string {
+  return [
     encodeAsk(proposal.ask),
     proposal.startTime,
     proposal.locationId === null ? '' : proposal.locationId,
     proposal.intervalWeeks,
     proposal.until,
-    proposal.score,
+    // A score is whatever the scheduler weighed it as, and nothing says that
+    // is a whole number. The identifier carries whole numbers, so it is
+    // rounded here and compared rounded wherever it is read.
+    Math.round(proposal.score),
   ].join('|');
 }
 
+/** One evening, written into the identifier of the button that accepts it. */
+export function encodeProposal(proposal: Proposal): string {
+  return TAKE_PREFIX + encodeBody(proposal);
+}
+
+/**
+ * The same evening, written into the button that opens the form asking what
+ * the repeat is called, and into the form itself.
+ */
+export function encodeNaming(proposal: Proposal): string {
+  return NAME_PREFIX + encodeBody(proposal);
+}
+
 export function decodeProposal(customId: string): Proposal | null {
-  if (!customId.startsWith(TAKE_PREFIX)) return null;
-  const parts = customId.slice(TAKE_PREFIX.length).split('|');
+  const prefix = [TAKE_PREFIX, NAME_PREFIX].find(one => customId.startsWith(one));
+  if (!prefix) return null;
+  const parts = customId.slice(prefix.length).split('|');
   if (parts.length !== 10) return null;
 
   const ask = decodeAsk(parts.slice(0, 5).join('|'));

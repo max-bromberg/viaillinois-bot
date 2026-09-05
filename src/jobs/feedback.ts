@@ -24,13 +24,16 @@ import type { JobHour } from './scheduler.ts';
  * writes down the marks it forwards, in Interest_Marks, and reads them back
  * here beside the reminders that are still outstanding.
  *
- * Four things stop a message being sent, and each of them is a way of not
- * asking somebody something twice. The person's own feedback switch, which the
- * message itself can flip. The person's direct message switch, because the bot
- * is then not to write to them at all. The switch on a server bound to the
- * organization whose event it is, which is how a board says its events do not
- * collect feedback. And Deliveries, keyed by the person and the event, which
- * is what makes the message happen once whatever the job does afterwards.
+ * Five things stop a message being sent, and each of them is a way of not
+ * asking somebody something they should not be asked. The person's own
+ * feedback switch, which the message itself can flip. The person's direct
+ * message switch, because the bot is then not to write to them at all. The
+ * switch on a server bound to the organization whose event it is, which is how
+ * a board says its events do not collect feedback. An event the web platform
+ * will not show that person, because an organization can mark an event
+ * internal between the mark and the morning after and the message names the
+ * event. And Deliveries, keyed by the person and the event, which is what
+ * makes the message happen once whatever the job does afterwards.
  *
  * The marks on an event go once the event has been dealt with, whether
  * anybody was asked or not. They have served their one purpose by then, and
@@ -122,7 +125,7 @@ export function createFeedbackJob(options: FeedbackJobOptions): FeedbackJob {
   }
 
   /** Ask one person about one event, and say what became of the message. */
-  async function ask(event: ViaEvent, discordUserId: string, result: FeedbackResult): Promise<void> {
+  async function ask(eventId: number, discordUserId: string, result: FeedbackResult): Promise<void> {
     const preferences = await feed.preferences(discordUserId);
     if (preferences.feedbackOptOut || preferences.directMessageOptOut) {
       result.skipped += 1;
@@ -138,13 +141,33 @@ export function createFeedbackJob(options: FeedbackJobOptions): FeedbackJob {
       return;
     }
 
+    /**
+     * The event as this person may see it. An organization can mark an event
+     * internal between the mark and the morning after, and whether somebody
+     * may see it is the web platform's decision, so the message is drawn from
+     * the read made as them. A read that comes back empty is somebody who may
+     * not see it any more, and they are passed over in silence rather than
+     * sent a message naming a meeting they cannot open.
+     */
+    let event: ViaEvent | null;
+    try {
+      event = await via.getEvent(eventId, discordUserId);
+    } catch (err) {
+      if (!(err instanceof ViaError)) throw err;
+      event = null;
+    }
+    if (!event) {
+      result.skipped += 1;
+      return;
+    }
+
     const intended = await deliveries.intend({
       outboxId: NO_OUTBOX_ENTRY,
       target: userTarget(discordUserId),
-      purpose: feedbackPurpose(event.eventId),
+      purpose: feedbackPurpose(eventId),
       kind: 'direct_message',
     });
-    if (!intended.isNew) {
+    if (!intended.isNew && intended.deliveredAt !== null) {
       result.skipped += 1;
       return;
     }
@@ -214,7 +237,7 @@ export function createFeedbackJob(options: FeedbackJobOptions): FeedbackJob {
           }
 
           result.events += 1;
-          for (const person of asked) await ask(event, person, result);
+          for (const person of asked) await ask(eventId, person, result);
           await marks.clearEvent(eventId);
         } catch (err) {
           result.failed += 1;

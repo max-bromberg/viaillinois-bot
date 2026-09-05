@@ -377,9 +377,11 @@ Tests run the same files through Vitest.
 ### The gateway
 
 The bot holds one gateway connection, as a single shard, which is ample for the number of
-servers involved. It requests only the unprivileged intents it needs: guilds, guild
-scheduled events, guild members for role synchronisation, and direct messages. It never
-requests the message content intent or the presence intent. Message text reaches the bot
+servers involved. It requests only the unprivileged intents it needs, which are guilds and
+guild scheduled events. It requests no others: a mapped role is given and taken back
+through the REST calls, the daily reconciliation reads membership from VIA rather than from
+Discord, and an interaction reaches the bot whatever intents it holds. It never requests
+the message content intent or the presence intent. Message text reaches the bot
 only inside a context menu interaction on a specific message, which Discord delivers as part
 of the interaction, and the bot uses it for that interaction and discards it.
 

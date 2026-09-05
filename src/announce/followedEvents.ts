@@ -21,6 +21,19 @@ import type { ViaClient, ViaEvent } from '../via/client.ts';
 /** How many events one timed post reads at a time. */
 export const LISTING_LIMIT = 200;
 
+/**
+ * How many events a message that lists a week asks for.
+ *
+ * Discord carries two thousand characters, and a line of a digest runs to
+ * something under a hundred, so a message holds somewhere around twenty five
+ * days and events together. Sixty is comfortably more than any message will
+ * show and small enough that a busy term does not read two hundred rows out
+ * of the web platform every hour to throw most of them away. What is read and
+ * does not fit is cut by fitToMessage, which says where the rest of the week
+ * is.
+ */
+export const WEEK_LISTING_LIMIT = 60;
+
 export interface FollowedEventsOptions {
   guilds: GuildStore;
   via: Pick<ViaClient, 'listEvents'>;

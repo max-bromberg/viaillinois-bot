@@ -5,7 +5,8 @@ import {
   POLLED_CANDIDATES,
 } from '../render/schedule.ts';
 import {
-  decodeAsk, decodeProposal, encodeProposal, POLL_IN_PREFIX, POLL_PREFIX, TAKE_PREFIX,
+  decodeAsk, decodeProposal, encodeNaming, encodeProposal,
+  NAME_PREFIX, POLL_IN_PREFIX, POLL_PREFIX, TAKE_PREFIX,
   type Proposal, type ScheduleAsk,
 } from '../scheduler/proposal.ts';
 import type { PolledCandidate } from '../scheduler/polls.ts';
@@ -33,6 +34,13 @@ import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.
  * won on Monday is not always the evening the scheduler would offer on
  * Wednesday, and a board that is about to fill a term with meetings deserves
  * to see the difference first.
+ *
+ * That check is why accepting is two steps. Discord takes a form only as the
+ * first thing an application says about an interaction, which leaves three
+ * seconds rather than fifteen minutes, and asking the scheduler again is a
+ * call to the web platform. So the accept button is answered like any other
+ * command, with what the check found and a button, and that button opens the
+ * form with nothing at all behind it.
  */
 
 const recommendFeature = featureById('scheduler.recommend');
@@ -62,6 +70,7 @@ export const SCHEDULER_BUTTON = {
   poll: (ask: string) => `${POLL_PREFIX}${ask}`,
   pollIn: (ask: string) => `${POLL_IN_PREFIX}${ask}`,
   takePrefix: TAKE_PREFIX,
+  namePrefix: NAME_PREFIX,
 };
 
 /** What the command options come to, with the defaults for anything left out. */
@@ -84,19 +93,35 @@ export function askOf(interaction: Interaction): ScheduleAsk | null {
 }
 
 /**
+ * How far ahead the first meeting of a repeat is looked for, which is a week.
+ * A weekly repeat begins on one of the seven days that come next, whichever
+ * weekday it settles on, so a week is the whole of the question.
+ */
+export const SEARCH_DAYS = 7;
+
+/**
  * The question the scheduler is asked.
  *
- * A search over one week asks about a single evening, so it carries no repeat.
+ * A search over one week asks about a single evening, so it carries no repeat
+ * and the date range is the week it is about.
+ *
  * A search over the rest of the term asks about a weekly repeat and leaves the
  * end date out, which is how the web platform's own route says "to the end of
- * instruction", read from the academic calendar it already holds.
+ * instruction", read from the academic calendar it already holds. The
+ * dashboard sends that date itself, because it has read the semester; the bot
+ * cannot, because the internal service API has no endpoint that answers when
+ * the term ends. What the two surfaces send therefore differs in one field and
+ * asks the same question: the route fills the end of the repeat in from the
+ * calendar either way, and every week of the term is weighed from it. The date
+ * range the bot sends is only where the first meeting is looked for, which is
+ * the coming week whichever weekday the repeat settles on.
  */
 export function requestFor(ask: ScheduleAsk, now: Date): ScheduleRequest {
   const start = campusToday(now);
   return {
     rsoId: ask.rsoId,
     durationMinutes: ask.minutes,
-    dateRange: { start, end: campusDatePlus(7, now) },
+    dateRange: { start, end: campusDatePlus(SEARCH_DAYS, now) },
     timeConstraint: { startHour: ask.earliestHour, endHour: ask.latestHour },
     ...(ask.span === 'term'
       ? { recurrence: { intervalWeeks: 1, daysOfWeek: [] } }
@@ -289,11 +314,24 @@ function titleModal(customId: string, when: string): Reply {
   };
 }
 
+/** The button that opens the form asking what the repeat is called. */
+function nameButton(proposal: Proposal): Reply['components'] {
+  return [{
+    kind: 'row',
+    components: [{
+      kind: 'button',
+      style: 'primary',
+      label: 'Name this repeat',
+      customId: encodeNaming(proposal),
+    }],
+  }];
+}
+
 /**
- * Check the recommendation again and, when it still stands, ask what the
- * repeat is called. When it does not, say what has changed and offer the
- * evening as it now stands, because a board about to fill a term with meetings
- * should read that before it happens rather than afterwards.
+ * Check the recommendation again and, when it still stands, offer the button
+ * that asks what the repeat is called. When it does not, say what has changed
+ * and offer the evening as it now stands, because a board about to fill a term
+ * with meetings should read that before it happens rather than afterwards.
  */
 async function take(
   proposal: Proposal,
@@ -305,9 +343,19 @@ async function take(
 
   const still = matching(proposal, answer.candidates);
   // The same evening, weighed the same way, is the recommendation that was
-  // shown, so there is nothing to read before going ahead.
-  if (still && still.score === proposal.score) {
-    return titleModal(encodeProposal(proposal), describeCandidate(still));
+  // shown, so there is nothing to read before going ahead. The score is
+  // compared rounded, because that is how the button carries it.
+  if (still && Math.round(still.score) === proposal.score) {
+    const weeks = describeWeeks(still);
+    return {
+      content: [
+        `VIA still recommends ${describeCandidate(still)}, scoring ${still.score}.`,
+        ...(weeks ? [weeks] : []),
+        '',
+        'Name the repeat to create it. Nothing is created until you have.',
+      ].join('\n'),
+      components: nameButton(proposal),
+    };
   }
 
   const best = still ?? answer.candidates[0];
@@ -399,26 +447,48 @@ async function create(
 }
 
 /**
- * One handler for the poll button, the channel menu, the accept buttons and
- * the form that names a repeat, because Discord routes all of them by the
- * identifier the message was built with.
+ * The accept button, which checks the recommendation again.
+ *
+ * It is answered like any other command, acknowledged first and answered
+ * after, because the check is a call to the web platform and Discord's three
+ * second window for a form is not where a call to the web platform belongs.
  */
 export const schedulerAcceptComponent: ComponentHandler = {
   featureId: recommendFeature.id,
   prefix: TAKE_PREFIX,
   ephemeral: true,
-  // Accepting checks the recommendation again and then opens a form, which
-  // Discord takes only as the first thing said about an interaction. The form
-  // that comes back is a new interaction, so creating the repeat is
-  // acknowledged and answered like anything else.
+
+  async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
+    const proposal = decodeProposal(interaction.customId ?? '');
+    if (!proposal) return { content: NOTHING_TO_ACCEPT_MESSAGE };
+    return take(proposal, interaction, context);
+  },
+};
+
+/**
+ * The button that asks what the repeat is called, and the form that comes
+ * back from it.
+ *
+ * The button opens the form with nothing behind it, which is what makes it
+ * safe inside the three seconds Discord allows for one. The form that comes
+ * back is a new interaction, so creating the repeat is acknowledged and
+ * answered like anything else.
+ */
+export const schedulerNameComponent: ComponentHandler = {
+  featureId: recommendFeature.id,
+  prefix: NAME_PREFIX,
+  ephemeral: true,
   opensModal: true,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const proposal = decodeProposal(interaction.customId ?? '');
     if (!proposal) return { content: NOTHING_TO_ACCEPT_MESSAGE };
-    return interaction.kind === 'modal'
-      ? create(proposal, interaction, context)
-      : take(proposal, interaction, context);
+    if (interaction.kind === 'modal') return create(proposal, interaction, context);
+
+    return titleModal(
+      encodeNaming(proposal),
+      `${campusDateTime(`${proposal.startTime.replace('T', ' ')}:00`)}`,
+    );
   },
 };
 

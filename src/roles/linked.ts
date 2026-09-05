@@ -57,7 +57,7 @@ export const LINKED_ROLE_METADATA: readonly LinkedRoleFact[] = [
   },
   {
     key: 'on_board',
-    name: 'On an organization board',
+    name: "On an organization's board",
     description: 'This person sits on the board of at least one ECE organization on VIA.',
     type: METADATA_TYPE.isTrue,
   },
@@ -115,7 +115,7 @@ export async function registerLinkedRoleMetadata(options: LinkedRoleOptions): Pr
  */
 export function linkedRolesAdvice(): string {
   return [
-    'Once this account is linked, VIA can also tell Discord that you have a verified NetID, whether you sit on an organization board, and when you linked.',
+    "Once this account is linked, VIA can also tell Discord that you have a verified NetID, whether you sit on an organization's board, and when you linked.",
     'A server owner can require any of those for a role, under Server Settings and then Roles, by adding a link to VIA under Links.',
     'Discord then asks you to verify when you take the role, and there is nothing further for you to set up here.',
   ].join(' ');

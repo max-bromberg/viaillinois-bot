@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { createViaHttpClient, INTERNAL_PREFIX } from '../../src/via/http.ts';
+import { createViaHttpClient, INTERNAL_PREFIX, MAX_RETRY_AFTER_SECONDS } from '../../src/via/http.ts';
 import {
   ViaError, ViaBusyError, outboxChangedFields, outboxEvent,
 } from '../../src/via/client.ts';
@@ -207,6 +207,31 @@ describe('the web platform client over HTTP', () => {
     expect((failure as ViaBusyError).retryAfterSeconds).toBe(3);
     expect((failure as ViaBusyError).code).toBe('busy');
     expect(waits).toEqual([3000]);
+  });
+
+  /**
+   * The wait comes from the web platform, and a wait an hour long would hold
+   * the interaction open long past the fifteen minutes Discord allows and
+   * long past the point where anybody is still reading. It is capped, and
+   * what the person is told is the wait that was actually taken.
+   */
+  it('waits no longer than the cap, whatever wait the busy answer named', async () => {
+    const { via, waits } = client([
+      json(503, '{"error":"VIA is busy right now.","retry_after_seconds":3600}'),
+      json(200, fixture('links.session.json')),
+    ]);
+    await via.openLinkSession('204255221017214977');
+    expect(MAX_RETRY_AFTER_SECONDS).toBe(60);
+    expect(waits).toEqual([60_000]);
+  });
+
+  it('names the capped wait in the busy error, so nobody is told to wait an hour', async () => {
+    const { via } = client([
+      json(503, '{"error":"VIA is busy right now.","retry_after_seconds":3600}'),
+      json(503, '{"error":"VIA is busy right now.","retry_after_seconds":3600}'),
+    ]);
+    const failure = await via.openLinkSession('204255221017214977').then(() => null, (err: unknown) => err);
+    expect((failure as ViaBusyError).retryAfterSeconds).toBe(MAX_RETRY_AFTER_SECONDS);
   });
 
   it('turns a network failure into a typed error rather than a fetch error', async () => {
@@ -421,6 +446,34 @@ describe('reading the outbox', () => {
     const page = await via.readOutbox({ after: 11 });
     expect(page.entries).toEqual([]);
     expect(page.nextAfter).toBe(null);
+  });
+
+  /**
+   * The identifier of an entry is what the cursor is set to once the entry has
+   * been handled. An identifier that is not a whole number would set the
+   * cursor to something no comparison is true of, and every entry after it
+   * would be read for ever or never. So an entry like that is left out of the
+   * page with a line in the log loud enough to be found, and the entries
+   * around it are handled as usual.
+   */
+  it('leaves out an entry whose identifier is not a whole number', async () => {
+    const { via } = client([json(200, JSON.stringify({
+      entries: [
+        { outbox_id: 1, kind: 'event.created', subject_type: 'event', subject_id: '10', rso_id: 1, payload: {}, created_at: '2026-09-05T12:00:00-05:00' },
+        { outbox_id: 'seven', kind: 'event.updated', subject_type: 'event', subject_id: '10', rso_id: 1, payload: {}, created_at: '2026-09-05T12:00:01-05:00' },
+        { kind: 'event.deleted', subject_type: 'event', subject_id: '10', rso_id: 1, payload: {}, created_at: '2026-09-05T12:00:02-05:00' },
+        { outbox_id: 4, kind: 'event.cancelled', subject_type: 'event', subject_id: '10', rso_id: 1, payload: {}, created_at: '2026-09-05T12:00:03-05:00' },
+      ],
+      next_after: 4,
+    }))]);
+
+    const page = await via.readOutbox({ after: 0 });
+    expect(page.entries.map(entry => entry.outboxId)).toEqual([1, 4]);
+  });
+
+  it('carries no cursor rather than one that is not a whole number', async () => {
+    const { via } = client([json(200, JSON.stringify({ entries: [], next_after: 'later' }))]);
+    expect((await via.readOutbox({ after: 0 })).nextAfter).toBe(null);
   });
 });
 

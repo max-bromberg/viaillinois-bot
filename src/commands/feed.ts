@@ -2,12 +2,15 @@ import { featureById } from '../features/registry.ts';
 import { WEEKDAY_NAMES, describeHour } from '../jobs/clock.ts';
 import { campusStamp, toInstant } from '../render/campusTime.ts';
 import { eventSummary } from '../render/eventCard.ts';
+import { LEAD_CHOICES, describeLead } from '../render/digest.ts';
 import { ViaError, type PersonalCalendar, type Rso, type ViaEvent } from '../via/client.ts';
 import {
   LINK_BUTTON, NOT_AN_RSO_MESSAGE, NO_SUCH_RSO_MESSAGE, answerFor, identifier, requireLink,
 } from './shared.ts';
 import type { CommandContext, CommandHandler, ComponentHandler } from './types.ts';
-import type { AutocompleteChoice, Interaction, Reply, ReplyRow } from '../discord/adapter.ts';
+import type {
+  AutocompleteChoice, Interaction, Reply, ReplyButton, ReplyRow,
+} from '../discord/adapter.ts';
 import type { FeedPreferences, Follows } from '../feed/store.ts';
 
 /**
@@ -52,20 +55,21 @@ export const NO_REMINDERS_MESSAGE =
 export const EVENT_GONE_MESSAGE =
   'VIA does not have that event any more, so there is nothing to be reminded of.';
 
-/** How long a reminder can be asked for ahead of an event, in the words of the menu. */
-export const LEAD_CHOICES: readonly { minutes: number; label: string }[] = [
-  { minutes: 15, label: '15 minutes before' },
-  { minutes: 30, label: '30 minutes before' },
-  { minutes: 60, label: 'An hour before' },
-  { minutes: 120, label: 'Two hours before' },
-  { minutes: 240, label: 'Four hours before' },
-  { minutes: 1440, label: 'A day before' },
-];
+/** The identifier of the button that takes one reminder back from the list. */
+export const FORGET_REMINDER = (eventId: number) => `feed:forget:${eventId}`;
 
-/** How long a reminder lead time is, in the words the settings panel writes. */
-export function describeLead(minutes: number): string {
-  return `${minutes} minutes`;
-}
+/**
+ * How many reminders the list shows with a button each. Discord takes five
+ * buttons in a row and five rows in a message, and the list needs no other
+ * rows, so ten is two full rows and room to spare.
+ */
+export const REMINDERS_SHOWN = 10;
+
+// The lead times and the words they read in belong to the renderings as much
+// as to this panel, because the reminder the bot sends carries them too, so
+// they are written once there and reached from here under the names they were
+// first published under.
+export { LEAD_CHOICES, describeLead } from '../render/digest.ts';
 
 /** What somebody follows, in one sentence and a list. */
 export function describeFollows(follows: Follows, rsos: readonly Rso[]): string {
@@ -390,6 +394,15 @@ export const feedComponent: ComponentHandler = {
     if (needsLink) return needsLink;
 
     const customId = interaction.customId ?? '';
+
+    if (customId.startsWith('feed:forget:')) {
+      const eventId = identifier(customId.slice('feed:forget:'.length));
+      if (eventId !== null) {
+        await context.feed.removeReminderFor(interaction.userId, eventId);
+      }
+      return renderReminders(interaction, context);
+    }
+
     const held = await context.feed.preferences(interaction.userId);
 
     if (customId === 'feed:day') {
@@ -464,6 +477,58 @@ export async function toggleReminder(
   };
 }
 
+/**
+ * The events somebody asked to be reminded of, with the button that takes
+ * each one back.
+ *
+ * The rows are numbered and the buttons are labelled with the same numbers,
+ * for the reason the listing of events numbers its own: a button labelled with
+ * a trimmed title stops matching its row as soon as a title is long, and
+ * somebody reading the third line should be able to press the third button.
+ */
+export async function renderReminders(
+  interaction: Interaction,
+  context: CommandContext,
+): Promise<Reply> {
+  const held = await context.feed.listReminders(interaction.userId);
+  if (held.length === 0) return { content: NO_REMINDERS_MESSAGE, components: [] };
+
+  const lines = ['**The events you asked to be reminded of**', ''];
+  const buttons: ReplyButton[] = [];
+
+  for (const row of held) {
+    let event: ViaEvent | null = null;
+    try {
+      event = await context.via.getEvent(row.eventId, interaction.userId);
+    } catch (err) {
+      return answerFor(err);
+    }
+    // An event VIA no longer has is a reminder about nothing, which the
+    // reminder job clears when it comes due.
+    if (!event) continue;
+
+    lines.push(`${buttons.length + 1}. ${eventSummary(event, { withRso: true })}`);
+    if (buttons.length < REMINDERS_SHOWN) {
+      buttons.push({
+        kind: 'button',
+        style: 'secondary',
+        label: `Remove ${buttons.length + 1}`,
+        customId: FORGET_REMINDER(event.eventId),
+      });
+    }
+  }
+
+  if (buttons.length === 0) return { content: NO_REMINDERS_MESSAGE, components: [] };
+
+  lines.push('', 'Press the number of a reminder to remove it.');
+
+  const rows: ReplyRow[] = [];
+  for (let at = 0; at < buttons.length; at += 5) {
+    rows.push({ kind: 'row', components: buttons.slice(at, at + 5) });
+  }
+  return { content: lines.join('\n'), components: rows };
+}
+
 export const feedRemindersCommand: CommandHandler = {
   featureId: remindersFeature.id,
   name: `${remindersFeature.command!.group} ${remindersFeature.command!.name}`,
@@ -473,26 +538,7 @@ export const feedRemindersCommand: CommandHandler = {
     const needsLink = await requireLink(interaction, context);
     if (needsLink) return needsLink;
 
-    const held = await context.feed.listReminders(interaction.userId);
-    if (held.length === 0) return { content: NO_REMINDERS_MESSAGE };
-
-    const lines = ['**The events you asked to be reminded of**', ''];
-    for (const row of held) {
-      let event: ViaEvent | null = null;
-      try {
-        event = await context.via.getEvent(row.eventId, interaction.userId);
-      } catch (err) {
-        return answerFor(err);
-      }
-      // An event VIA no longer has is a reminder about nothing, which the
-      // reminder job clears when it comes due.
-      if (!event) continue;
-      lines.push(`- ${eventSummary(event, { withRso: true })}`);
-    }
-
-    if (lines.length === 2) return { content: NO_REMINDERS_MESSAGE };
-    lines.push('', 'Press Remind me on any of them again to take the reminder back.');
-    return { content: lines.join('\n') };
+    return renderReminders(interaction, context);
   },
 };
 

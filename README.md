@@ -25,9 +25,13 @@ individual feature and the channel it posts to.
 
 ## Status
 
-The bot is built and untagged. Every feature of the first release is written, with its
+The bot is built and untagged. Every part of the first release has been written, with its
 tests, and none of it has been through a release: there is no `v0.1.0` yet, and the web
-platform's `deploy/bot-release` does not name a tag of this repository.
+platform's `deploy/bot-release` does not name a tag of this repository. Written is not the
+same as finished. The first review of the whole of it found work in every part, from
+deliveries that were never retried to copy that told a person something they had not done,
+and `CHANGELOG.md` records what that review changed. What a second review finds is the
+honest measure of how close this is.
 
 What runs now, against the fake web platform client and the plain interaction objects the
 tests are written on:

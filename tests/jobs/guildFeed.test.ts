@@ -4,6 +4,7 @@ import { createDayOfReminderJob, dayOfPurpose } from '../../src/jobs/dayOfRemind
 import { createThisWeekMessage, THISWEEK_PURPOSE } from '../../src/announce/thisWeek.ts';
 import { createFeatureDisabler } from '../../src/guilds/disable.ts';
 import { channelTarget } from '../../src/delivery/deliveries.ts';
+import { POST_SPREAD_MS } from '../../src/delivery/spread.ts';
 import { createFakeViaClient, type FakeViaClient } from '../../src/via/fake.ts';
 import { memoryGuildStore } from '../commands/support.ts';
 import { memoryDeliveries, recordingActions, recordingDirectMessages } from '../support/proactive.ts';
@@ -23,6 +24,8 @@ import type { JobHour } from '../../src/jobs/scheduler.ts';
  */
 
 const GUILD = '900000000000000001';
+const OTHER_GUILD = '900000000000000002';
+const THIRD_GUILD = '900000000000000003';
 const MANAGER = '204255221017214977';
 const CHANNEL = '700000000000000001';
 
@@ -79,26 +82,36 @@ function built() {
   const disable = createFeatureDisabler({ guilds, deliveries, sendDirectMessage: directMessages.send });
   const via = createFakeViaClient();
   seedWeek(via);
+  /** The pauses the jobs took between servers, recorded rather than served. */
+  const spreads: number[] = [];
+  const sleep = async (milliseconds: number) => { spreads.push(milliseconds); };
 
   return {
-    guilds, deliveries, actions, directMessages, disable, via,
-    digest: createGuildDigestJob({ guilds, deliveries, actions, via, disable }),
+    guilds, deliveries, actions, directMessages, disable, via, spreads,
+    digest: createGuildDigestJob({ guilds, deliveries, actions, via, disable, sleep }),
     dayOf: createDayOfReminderJob({
-      guilds, deliveries, actions, via, disable, websiteUrl: 'https://viaillinois.com',
+      guilds, deliveries, actions, via, disable, sleep, websiteUrl: 'https://viaillinois.com',
     }),
-    thisWeek: createThisWeekMessage({ guilds, deliveries, actions, via, disable }),
+    thisWeek: createThisWeekMessage({ guilds, deliveries, actions, via, disable, sleep }),
   };
 }
 
-async function setUp(guilds: GuildStore, featureId: string, options: { channel?: boolean } = {}) {
-  await guilds.createInstallation(GUILD, MANAGER);
-  await guilds.setKind(GUILD, 'rso');
-  await guilds.setBinding(GUILD, { binding: 'rso', rsoId: 1 });
-  await guilds.setFeatureEnabled(GUILD, featureId, true);
+async function setUp(
+  guilds: GuildStore,
+  featureId: string,
+  options: { channel?: boolean; guildId?: string } = {},
+) {
+  const guildId = options.guildId ?? GUILD;
+  await guilds.createInstallation(guildId, MANAGER);
+  await guilds.setKind(guildId, 'rso');
+  await guilds.setBinding(guildId, { binding: 'rso', rsoId: 1 });
+  await guilds.setFeatureEnabled(guildId, featureId, true);
   if (options.channel !== false) {
     const purpose = featureId === 'announce.digest' ? 'digest'
       : featureId === 'announce.dayof' ? 'reminders' : 'thisweek';
-    await guilds.bindChannel(GUILD, purpose, CHANNEL);
+    // Channel identifiers are unique across Discord, so two servers never
+    // share one, which is what the delivery key over the target relies on.
+    await guilds.bindChannel(guildId, purpose, `7${guildId.slice(1)}`);
   }
 }
 
@@ -119,6 +132,19 @@ describe('the weekly digest a server posts', () => {
     expect(posts[0]!.channelId).toBe(CHANNEL);
     expect(posts[0]!.reply!.content).toContain('Mon, Sep 7');
     expect(posts[0]!.reply!.content).toContain('General meeting');
+  });
+
+  /**
+   * Section 9 of the design: the proactive jobs spread their posts rather than
+   * firing every server's digest in the same second.
+   */
+  it('pauses between one server and the next, and not before the first', async () => {
+    await setUp(stack.guilds, 'announce.digest');
+    await setUp(stack.guilds, 'announce.digest', { guildId: OTHER_GUILD });
+    await setUp(stack.guilds, 'announce.digest', { guildId: THIRD_GUILD });
+
+    await stack.digest.run(SUNDAY_EVENING);
+    expect(stack.spreads).toEqual([POST_SPREAD_MS, POST_SPREAD_MS]);
   });
 
   it('posts nothing in a server that has not switched the digest on', async () => {

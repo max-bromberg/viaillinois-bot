@@ -88,6 +88,55 @@ export interface HealthServer {
 }
 
 /**
+ * How long an answer from the web platform's internal service API is held.
+ *
+ * The health port answers anybody who can reach it, and the cutover polls it
+ * every second or two while it waits for the container to come up. Making one
+ * call to the web platform for each of those would be the bot's own health
+ * check adding load to a web platform that may already be in trouble, which is
+ * exactly when the check matters. A few seconds is short enough that the
+ * cutover still sees the state change within one of its polls.
+ */
+export const VIA_PROBE_TTL_MS = 5_000;
+
+/**
+ * A probe whose answer is held for a moment, so that a burst of hits on the
+ * health port costs one call rather than one each.
+ *
+ * Hits that arrive while a call is still out share that call rather than
+ * making their own. A refusal is held as well as an answer, because a web
+ * platform that is not answering is the case where the hits matter most, and
+ * the first caller still reads the reason so that it reaches the log once.
+ */
+export function heldFor(
+  probe: () => Promise<boolean> | boolean,
+  options: { ttlMs?: number; now?: () => Date } = {},
+): () => Promise<boolean> {
+  const { ttlMs = VIA_PROBE_TTL_MS, now = () => new Date() } = options;
+  let held: { answer: boolean; expiresAt: number } | null = null;
+  let inFlight: Promise<boolean> | null = null;
+
+  return async function ask(): Promise<boolean> {
+    if (held && held.expiresAt > now().getTime()) return held.answer;
+    if (inFlight) return inFlight;
+
+    inFlight = (async () => {
+      try {
+        const answer = Boolean(await probe());
+        held = { answer, expiresAt: now().getTime() + ttlMs };
+        return answer;
+      } catch (err) {
+        held = { answer: false, expiresAt: now().getTime() + ttlMs };
+        throw err;
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
+  };
+}
+
+/**
  * A probe that throws is a probe that failed. The reason stays in the log: a
  * database error carries the host, the user and driver internals, and this
  * endpoint answers anyone who can reach the port.

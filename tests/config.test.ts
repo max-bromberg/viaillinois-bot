@@ -40,6 +40,7 @@ describe('loadConfig', () => {
         unlinkedPerHour: 30,
         linkedPerHour: 120,
         guildPerHour: 600,
+        autocompletePerMinute: 300,
       },
     });
   });
@@ -50,6 +51,7 @@ describe('loadConfig', () => {
       unlinkedPerHour: 30,
       linkedPerHour: 120,
       guildPerHour: 600,
+      autocompletePerMinute: 300,
     });
   });
 
@@ -58,10 +60,12 @@ describe('loadConfig', () => {
     env.RATE_LIMIT_UNLINKED_PER_HOUR = '10';
     env.RATE_LIMIT_LINKED_PER_HOUR = '200';
     env.RATE_LIMIT_GUILD_PER_HOUR = '1000';
+    env.RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE = '60';
     expect(loadConfig(env).rateLimits).toEqual({
       unlinkedPerHour: 10,
       linkedPerHour: 200,
       guildPerHour: 1000,
+      autocompletePerMinute: 60,
     });
   });
 
@@ -84,6 +88,20 @@ describe('loadConfig', () => {
       expect(() => loadConfig(env)).toThrow(name);
     });
   }
+
+  it('refuses an autocomplete limit that is not a whole number of completions', () => {
+    const env = fullEnvironment();
+    env.RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE = 'lots';
+    expect(() => loadConfig(env)).toThrow(
+      'The environment variable RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE must be a whole number of completions per minute, and "lots" is not one.'
+    );
+  });
+
+  it('refuses an autocomplete limit of zero, because a limit of zero refuses everybody', () => {
+    const env = fullEnvironment();
+    env.RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE = '0';
+    expect(() => loadConfig(env)).toThrow('RATE_LIMIT_AUTOCOMPLETE_PER_MINUTE');
+  });
 
   it('defaults the public address to the website VIA actually runs at', () => {
     const env = fullEnvironment();

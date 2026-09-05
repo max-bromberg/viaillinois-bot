@@ -1,5 +1,5 @@
 import { campusDate, campusDateTime, campusTimeOfDay, toInstant } from './campusTime.ts';
-import { groupByCampusDay, weekHeading } from './digest.ts';
+import { fitToMessage, groupByCampusDay, weekHeading } from './digest.ts';
 import { placeOf, whenOf } from './eventCard.ts';
 import type { Reply } from '../discord/adapter.ts';
 import type { Building, Course, CourseSection, FreeRooms, Midterm } from '../via/client.ts';
@@ -34,7 +34,7 @@ export const EXAM_STOP_SENTENCE =
   'You receive this because you added this course with the courses command. Run the courses remove command to stop hearing about it, or run the feed settings command to stop the direct messages VIA sends you.';
 
 /** What a week with no exams in it says, so that silence is never the answer. */
-export const NO_EXAMS_THIS_WEEK = 'There are no exams in this week.';
+export const NO_EXAMS_THIS_WEEK = 'There are no exams this week.';
 
 /** What a course with no exams recorded says. */
 export function noExamsFor(courseCode: string): string {
@@ -80,19 +80,18 @@ function pendingCount(midterms: readonly Midterm[]): number {
 export function renderMidterms(courseCode: string, midterms: readonly Midterm[]): string {
   if (midterms.length === 0) return noExamsFor(courseCode);
 
-  const lines = [
-    `**The exams VIA has for ${courseCode}**`,
-    '',
-    ...midterms.map(midterm => `- ${midtermLine(midterm)}`),
-  ];
-
   const pending = pendingCount(midterms);
-  if (pending > 0) {
-    lines.push('', pending === 1
-      ? 'One of these times is still pending confirmation, so please check with the course before you plan around it.'
-      : `${pending} of these times are still pending confirmation, so please check with the course before you plan around them.`);
-  }
-  return lines.join('\n');
+  const tail = pending === 0 ? [] : ['', pending === 1
+    ? 'One of these times is still pending confirmation, so please check with the course before you plan around it.'
+    : `${pending} of these times are still pending confirmation, so please check with the course before you plan around them.`];
+
+  // Each exam is a line of its own, so a course with more exams than one
+  // message will hold loses whole exams from the end rather than half a line.
+  return fitToMessage({
+    head: [`**The exams VIA has for ${courseCode}**`, ''],
+    days: midterms.map(midterm => [`- ${midtermLine(midterm)}`]),
+    tail,
+  });
 }
 
 /** What the exams message covers: a week and the exams that fall in it. */
@@ -109,24 +108,18 @@ export interface ExamWeekListing {
  */
 export function renderExamsThisWeek(listing: ExamWeekListing): Reply {
   const groups = groupByCampusDay(listing.midterms);
-
-  const body: string[] = [];
-  if (groups.length === 0) {
-    body.push(NO_EXAMS_THIS_WEEK);
-  } else {
-    for (const group of groups) {
-      if (body.length > 0) body.push('');
-      body.push(`**${group.label}**`);
-      for (const midterm of group.events) body.push(`- ${midtermLine(midterm, { withCourse: true })}`);
-    }
-  }
+  const days = groups.length === 0
+    ? [[NO_EXAMS_THIS_WEEK]]
+    : groups.map(group => [
+      `**${group.label}**`,
+      ...group.events.map(midterm => `- ${midtermLine(midterm, { withCourse: true })}`),
+    ]);
 
   return {
-    content: [
-      `**The exams this week**, ${weekHeading(listing.weekStart)}`,
-      '',
-      ...body,
-    ].join('\n'),
+    content: fitToMessage({
+      head: [`**The exams this week**, ${weekHeading(listing.weekStart)}`, ''],
+      days,
+    }),
     components: [],
   };
 }

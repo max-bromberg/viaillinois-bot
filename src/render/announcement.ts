@@ -34,10 +34,6 @@ export function isMove(changed: readonly string[]): boolean {
   return changed.some(field => MOVE_FIELDS.includes(field));
 }
 
-function headlineFor(event: ViaEvent, what: string): string {
-  return event.rsoName ? `${event.rsoName} has ${what}` : `There is ${what}`;
-}
-
 /**
  * The card with a line above it saying that this event is new.
  *
@@ -125,6 +121,23 @@ export function renderCancellationNotice(event: ViaEvent): string {
 }
 
 /**
+ * What an announcement becomes when the organization has marked the event
+ * internal.
+ *
+ * An announcements channel is read by the whole server, and an internal event
+ * is for the members of one organization. Drawing the card again would leave
+ * the title, the room and the description in a channel the organization has
+ * just said they do not belong in, so the announcement says only that the
+ * event is no longer announced there.
+ */
+export function renderInternalAnnouncement(): Reply {
+  return {
+    content: 'This event is now internal to its organization, so it is no longer announced here.',
+    components: [],
+  };
+}
+
+/**
  * What an announcement becomes when the thing it announced was removed from
  * VIA. The buttons go with it, because there is nothing left to be reminded
  * of or interested in.
@@ -140,6 +153,3 @@ export function renderRemovedAnnouncement(title: string | null): Reply {
     components: [],
   };
 }
-
-/** Kept for the handlers, which describe a headline the same way in their logs. */
-export { headlineFor };
