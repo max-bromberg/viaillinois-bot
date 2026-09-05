@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { linkCommand, LINK_POLL_INTERVAL_MS, LINK_POLL_WINDOW_MS } from '../../src/commands/link.ts';
+import { linkComponent, linkCommand, LINK_POLL_INTERVAL_MS, LINK_POLL_WINDOW_MS } from '../../src/commands/link.ts';
 import { ViaError } from '../../src/via/client.ts';
 import { interaction, testContext } from './support.ts';
 
@@ -96,5 +96,39 @@ describe('the link command', () => {
     via.failNextWith(new ViaError('The VIA web platform did not answer.', 0, 'unreachable'));
     await expect(scheduled[0]!()).resolves.toBeUndefined();
     expect(directMessages).toEqual([]);
+  });
+});
+
+/**
+ * The link button.
+ *
+ * Several answers offer a Link button rather than telling a person to go and
+ * type the link command: the event card's reminder and interest buttons, the
+ * organization card's follow button, and the refusal a manager reads when
+ * binding a server needs a VIA account they do not have. The button has to do
+ * what the command does, or it is a button that does nothing.
+ */
+describe('the link button on an answer that needs a VIA account', () => {
+  it('opens a link session, exactly as the command does', async () => {
+    const { context, via } = testContext();
+    const reply = await linkComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: 'identity:link' }),
+      context,
+    );
+    expect(via.sessions).toHaveLength(1);
+    expect(reply.content).toContain(via.sessions[0]!.session.address);
+  });
+
+  it('opens the session for the person who pressed it', async () => {
+    const { context, via } = testContext();
+    await linkComponent.run(
+      interaction({ kind: 'button', commandName: null, customId: 'identity:link', userId: '301422551071492041' }),
+      context,
+    );
+    expect(via.sessions[0]!.discordUserId).toBe('301422551071492041');
+  });
+
+  it('answers only the person who pressed it', () => {
+    expect(linkComponent.ephemeral).toBe(true);
   });
 });

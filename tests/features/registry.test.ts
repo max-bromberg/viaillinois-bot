@@ -6,8 +6,16 @@ import { findViolations } from '../../scripts/check-language.js';
 import { features, featureById, CHANNEL_PURPOSES } from '../../src/features/registry.ts';
 
 describe('the feature registry', () => {
-  it('registers the two identity features and nothing else yet', () => {
-    expect(features.map(f => f.id).sort()).toEqual(['identity.link', 'identity.unlink']);
+  it('registers the identity, reading and setup features the first two increments have', () => {
+    expect(features.map(f => f.id).sort()).toEqual([
+      'events.detail',
+      'events.list',
+      'identity.link',
+      'identity.unlink',
+      'rsos.detail',
+      'setup.configure',
+      'setup.remove',
+    ]);
   });
 
   it('gives every feature a unique identifier', () => {
@@ -78,7 +86,84 @@ describe('the feature registry', () => {
   });
 
   it('throws a sentence naming an unknown identifier', () => {
-    expect(() => featureById('events.list')).toThrow('There is no feature with the identifier events.list.');
+    expect(() => featureById('events.nonesuch')).toThrow('There is no feature with the identifier events.nonesuch.');
+  });
+
+  it('lets anybody read events and organizations, in every context', () => {
+    for (const id of ['events.list', 'events.detail', 'rsos.detail']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('command');
+      expect(feature.tier).toBe('read');
+      expect(feature.defaultEnabled).toBe(true);
+      expect([...feature.contexts].sort()).toEqual(['botDm', 'guild', 'privateChannel']);
+    }
+  });
+
+  it('keeps setup and removal to a server manager, in a server', () => {
+    for (const id of ['setup.configure', 'setup.remove']) {
+      const feature = featureById(id);
+      expect(feature.category).toBe('administration');
+      expect(feature.tier).toBe('manager');
+      expect(feature.defaultEnabled).toBe(true);
+      expect([...feature.contexts]).toEqual(['guild']);
+      // Manage Server is what the person needs, which the manager tier says.
+      // The bot needs no permission of its own to answer a setup panel.
+      expect(feature.requiredPermissions).toEqual([]);
+    }
+  });
+
+  it('reaches configuration by both the setup name and the config name', () => {
+    const command = featureById('setup.configure').command!;
+    expect(command.name).toBe('setup');
+    expect(command.alternateNames!.map(alternate => alternate.name)).toEqual(['config']);
+  });
+
+  it('names every command and option in the lower case Discord requires', () => {
+    for (const feature of features) {
+      if (!feature.command) continue;
+      const names = [feature.command.name, ...(feature.command.alternateNames ?? []).map(a => a.name)];
+      for (const name of names) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+      for (const option of feature.command.options ?? []) {
+        expect(option.name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+        expect(option.description.length).toBeGreaterThan(0);
+        expect(option.description.length).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it('never asks Discord both to complete an option and to offer it fixed choices', () => {
+    for (const feature of features) {
+      for (const option of feature.command?.options ?? []) {
+        expect(Boolean(option.autocomplete) && Boolean(option.choices)).toBe(false);
+      }
+    }
+  });
+
+  it('offers the four windows the design names on the events command', () => {
+    const window = featureById('events.list').command!.options!.find(o => o.name === 'window')!;
+    expect(window.choices!.map(choice => choice.value))
+      .toEqual(['today', 'thisweek', 'nextweek', 'thismonth']);
+  });
+
+  it('gives every command description and option description to the language check', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'via-bot-commands-'));
+    try {
+      const path = join(dir, 'commands.txt');
+      const lines: string[] = [];
+      for (const feature of features) {
+        if (!feature.command) continue;
+        lines.push(feature.command.description);
+        for (const alternate of feature.command.alternateNames ?? []) lines.push(alternate.description);
+        for (const option of feature.command.options ?? []) {
+          lines.push(option.description);
+          for (const choice of option.choices ?? []) lines.push(choice.name);
+        }
+      }
+      await writeFile(path, lines.join('\n') + '\n');
+      expect(findViolations([path])).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('lists the five channel purposes the design names', () => {

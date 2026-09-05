@@ -1,0 +1,4 @@
+{
+  "error": "You are not on the board of that organization, so you cannot bind a server to it.",
+  "code": "forbidden"
+}

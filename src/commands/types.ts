@@ -1,5 +1,6 @@
-import type { Interaction, Reply } from '../discord/adapter.ts';
+import type { AutocompleteChoice, Interaction, Reply } from '../discord/adapter.ts';
 import type { ViaClient } from '../via/client.ts';
+import type { GuildStore } from '../guilds/store.ts';
 import type { RateWindows } from '../ratelimit/windows.ts';
 
 /**
@@ -12,9 +13,24 @@ import type { RateWindows } from '../ratelimit/windows.ts';
  */
 export interface CommandContext {
   via: ViaClient;
+  /** What each server chose: its kind, its binding, its channels and its toggles. */
+  guilds: GuildStore;
+  /** The public address of the website, which the link buttons open. */
+  websiteUrl: string;
   rateWindows: RateWindows;
   /** Delete every row the bot holds for a Discord account. */
   deleteLocalData: (discordUserId: string) => Promise<void>;
+  /**
+   * Clear what the bot posted into a server, which the removal command calls
+   * before it deletes the rows that say where those posts are.
+   *
+   * The design has removal delete every scheduled event the bot created and
+   * unpin the message it pinned. Neither exists yet, because the half of this
+   * increment that creates them has not been written, so this is left out of
+   * the wiring and the removal says what it actually did. When the scheduled
+   * events and the pinned message arrive, they are given to removal here.
+   */
+  removeGuildPresence?: (guildId: string) => Promise<RemovedGuildPresence>;
   /** Send one direct message, which only ever goes to a linked person. */
   sendDirectMessage: (discordUserId: string, content: string) => Promise<void>;
   /**
@@ -27,6 +43,12 @@ export interface CommandContext {
   sleep: (milliseconds: number) => Promise<void>;
 }
 
+/** What clearing the bot's presence from a server removed. */
+export interface RemovedGuildPresence {
+  scheduledEvents: number;
+  unpinnedMessages: number;
+}
+
 export interface CommandHandler {
   /** The registry feature this command belongs to. */
   featureId: string;
@@ -34,6 +56,33 @@ export interface CommandHandler {
   name: string;
   /** Whether only the person who asked sees the answer. */
   ephemeral: boolean;
+  run(interaction: Interaction, context: CommandContext): Promise<Reply>;
+  /**
+   * The completions Discord shows while a person is still typing an option.
+   * A command with no completing option leaves this out.
+   */
+  autocomplete?(interaction: Interaction, context: CommandContext): Promise<AutocompleteChoice[]>;
+}
+
+/**
+ * A handler for the buttons and menus the bot's own answers carry.
+ *
+ * Every component identifier begins with the prefix of the handler that
+ * answers it, so routing is one lookup on a string rather than a registry of
+ * every button the bot has ever posted. A component that updates in place
+ * edits the message it sits on, which is what the setup panels do, and one
+ * that does not answers with a new ephemeral message, which is what the
+ * buttons on a public announcement have to do.
+ */
+export interface ComponentHandler {
+  /** The registry feature this component belongs to. */
+  featureId: string;
+  /** The start of every identifier this handler answers. */
+  prefix: string;
+  /** Whether the answer edits the message the component sits on. */
+  updateInPlace?: boolean;
+  /** Whether only the person who pressed it sees the answer, when it is a new message. */
+  ephemeral?: boolean;
   run(interaction: Interaction, context: CommandContext): Promise<Reply>;
 }
 

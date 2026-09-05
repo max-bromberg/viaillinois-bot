@@ -8,8 +8,10 @@
  * `tests/fixtures/internal`. Commands are written against the interface, so
  * almost every test needs neither the web platform nor Discord.
  *
- * The interface grows one increment at a time. The first increment needs the
- * three link endpoints and a health check, which is what is here.
+ * The interface grows one increment at a time. The first increment needed the
+ * three link endpoints and a health check. The second adds the reading
+ * endpoints the event commands answer from, and the binding confirmation,
+ * which is the one setup step the web platform decides rather than Discord.
  */
 
 /**
@@ -101,6 +103,86 @@ export interface LinkedAccount {
   memberships: Membership[];
 }
 
+/** One organization, as the reading endpoints answer it. */
+export interface Rso {
+  rsoId: number;
+  name: string;
+  description: string | null;
+  /** The colour the website draws the organization in, when it has one. */
+  logoColor: string | null;
+}
+
+/**
+ * One event, in the single shape every reading endpoint answers with, so a
+ * row in a list and an event's own answer are the same object. The series
+ * fields describe the pattern an event belongs to, and are null for an event
+ * that stands on its own. Times carry the campus offset, as the web platform
+ * sends them.
+ */
+export interface ViaEvent {
+  eventId: number;
+  rsoId: number;
+  rsoName: string | null;
+  title: string;
+  description: string | null;
+  startTime: string;
+  endTime: string;
+  /** Whether the organization marked the event internal to its own members. */
+  isPrivate: boolean;
+  /** When the event was cancelled, which is a state of its own rather than a delete. */
+  cancelledAt: string | null;
+  locationId: number | null;
+  building: string | null;
+  roomNumber: string | null;
+  /** A place written by hand, for an event that is not in a room VIA knows. */
+  locationText: string | null;
+  /** A short note a board attached to the event, such as which entrance to use. */
+  locationNote: string | null;
+  seriesId: number | null;
+  seriesFrequency: string | null;
+  seriesIntervalWeeks: number | null;
+  seriesDaysOfWeek: string | null;
+  seriesEndsOn: string | null;
+  interestCount: number;
+}
+
+/** Which timeframe of the feed a listing asks for, as the website names them. */
+export type EventTimeframe = 'upcoming' | 'archived' | 'all';
+
+/**
+ * What a listing asks for. Every field is optional, because the web platform's
+ * reading router has its own defaults and the bot sends only what it was
+ * actually asked for. From and to are campus wall clock, as YYYY-MM-DD or as
+ * YYYY-MM-DD HH:MM:SS, which is what the router parses.
+ */
+export interface EventQuery {
+  rsoIds?: readonly number[];
+  from?: string;
+  to?: string;
+  timeframe?: EventTimeframe;
+  /**
+   * Whether to ask for the events an organization marked internal. The web
+   * platform decides who actually sees them, from the acting person's
+   * memberships, so asking is not the same as being shown any.
+   */
+  includeInternal?: boolean;
+  limit?: number;
+  offset?: number;
+  /** The person the bot is acting for, which is what internal visibility turns on. */
+  actingDiscordUserId?: string;
+}
+
+export interface EventPage {
+  events: ViaEvent[];
+  /** How many events match the filters, which is what the page control counts. */
+  total: number;
+}
+
+export interface RsoWithEvents {
+  rso: Rso;
+  events: ViaEvent[];
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -108,6 +190,23 @@ export interface ViaClient {
   getLink(discordUserId: string): Promise<LinkedAccount | null>;
   /** Remove the link, answering whether there was one to remove. */
   unlink(discordUserId: string): Promise<boolean>;
+  /** Every organization, for autocomplete and for community server setup. */
+  listRsos(): Promise<Rso[]>;
+  /** One organization with the events it has coming up, or null when there is none. */
+  getRso(rsoId: number, actingDiscordUserId?: string): Promise<RsoWithEvents | null>;
+  /** The events matching a listing, with how many there are in all. */
+  listEvents(query: EventQuery): Promise<EventPage>;
+  /** One event, or null when it does not exist or the person may not see it. */
+  getEvent(eventId: number, actingDiscordUserId?: string): Promise<ViaEvent | null>;
+  /** The event as a calendar file, which is the text of an .ics. */
+  getEventCalendar(eventId: number): Promise<string>;
+  /**
+   * Ask the web platform whether the acting person may bind a server to an
+   * organization. It answers by refusing, so this returns nothing and throws a
+   * ViaError whose code is `not_linked` when the person has no VIA account and
+   * `forbidden` when they have one but are not on that board.
+   */
+  confirmBinding(rsoId: number, actingDiscordUserId: string): Promise<void>;
   /** Whether the web platform answers. */
   health(): Promise<boolean>;
 }
@@ -145,4 +244,85 @@ export function parseLinkedAccount(body: unknown): LinkedAccount {
       };
     }),
   };
+}
+
+function text(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value);
+}
+
+function count(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+export function parseRso(body: unknown): Rso {
+  const raw = body as Record<string, unknown>;
+  return {
+    rsoId: Number(raw.rso_id),
+    name: String(raw.name ?? ''),
+    description: text(raw.description),
+    logoColor: text(raw.logo_color),
+  };
+}
+
+export function parseEvent(body: unknown): ViaEvent {
+  const raw = body as Record<string, unknown>;
+  return {
+    eventId: Number(raw.event_id),
+    rsoId: Number(raw.rso_id),
+    rsoName: text(raw.rso_name),
+    title: String(raw.title ?? ''),
+    description: text(raw.description),
+    startTime: String(raw.start_time ?? ''),
+    endTime: String(raw.end_time ?? ''),
+    isPrivate: Boolean(raw.is_private),
+    cancelledAt: text(raw.cancelled_at),
+    locationId: count(raw.location_id),
+    building: text(raw.building),
+    roomNumber: text(raw.room_number),
+    locationText: text(raw.location_text),
+    locationNote: text(raw.location_note),
+    seriesId: count(raw.series_id),
+    seriesFrequency: text(raw.series_frequency),
+    seriesIntervalWeeks: count(raw.series_interval_weeks),
+    seriesDaysOfWeek: text(raw.series_days_of_week),
+    seriesEndsOn: text(raw.series_ends_on),
+    interestCount: Number(raw.interest_count ?? 0),
+  };
+}
+
+function parseEvents(value: unknown): ViaEvent[] {
+  return Array.isArray(value) ? value.map(parseEvent) : [];
+}
+
+export function parseRsos(body: unknown): Rso[] {
+  const raw = (body as Record<string, unknown> | null)?.rsos;
+  return Array.isArray(raw) ? raw.map(parseRso) : [];
+}
+
+export function parseRsoWithEvents(body: unknown): RsoWithEvents {
+  const raw = body as Record<string, unknown>;
+  return { rso: parseRso(raw.rso), events: parseEvents(raw.events) };
+}
+
+export function parseEventPage(body: unknown): EventPage {
+  const raw = body as Record<string, unknown>;
+  return { events: parseEvents(raw.events), total: Number(raw.total ?? 0) };
+}
+
+/**
+ * The query string a listing becomes, in the spelling the web platform's
+ * reading router parses. Nothing the caller did not ask for is sent, so the
+ * router's own defaults apply to everything else, and internal events are
+ * asked for only when they were asked for.
+ */
+export function eventQueryParams(query: EventQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.rsoIds && query.rsoIds.length > 0) params.set('rso_ids', query.rsoIds.join(','));
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  params.set('timeframe', query.timeframe ?? 'upcoming');
+  if (query.includeInternal) params.set('include_internal', 'true');
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.offset !== undefined) params.set('offset', String(query.offset));
+  return params;
 }

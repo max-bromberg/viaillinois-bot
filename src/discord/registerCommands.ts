@@ -2,7 +2,11 @@ import {
   ApplicationCommandOptionType, ApplicationCommandType, ApplicationIntegrationType,
   InteractionContextType, Routes, type REST,
 } from 'discord.js';
-import { features as allFeatures, type Feature, type InteractionContext } from '../features/registry.ts';
+import {
+  features as allFeatures,
+  type CommandOptionKind, type Feature, type FeatureCommand, type FeatureCommandOption,
+  type InteractionContext,
+} from '../features/registry.ts';
 
 /**
  * The application commands, built from the feature registry.
@@ -38,10 +42,20 @@ const CONTEXT_VALUES: Record<InteractionContext, InteractionContextType> = {
 /** The order Discord lists them in, which keeps the built list stable. */
 const CONTEXT_ORDER: InteractionContext[] = ['guild', 'botDm', 'privateChannel'];
 
+export interface CommandChoiceJson {
+  name: string;
+  value: string;
+}
+
 export interface CommandOptionJson {
   type: ApplicationCommandOptionType;
   name: string;
   description: string;
+  required?: boolean;
+  autocomplete?: boolean;
+  choices?: CommandChoiceJson[];
+  /** A subcommand carries the options of the command it stands for. */
+  options?: CommandOptionJson[];
 }
 
 export interface CommandJson {
@@ -53,9 +67,59 @@ export interface CommandJson {
   options?: CommandOptionJson[];
 }
 
-/** Only a command feature that declares a command becomes one. */
+/** The option types Discord numbers, for the kinds a feature may declare. */
+const OPTION_TYPES: Record<CommandOptionKind, ApplicationCommandOptionType> = {
+  string: ApplicationCommandOptionType.String,
+  boolean: ApplicationCommandOptionType.Boolean,
+};
+
+/**
+ * Any feature that declares a command becomes one, whichever category it is
+ * in. Setup and removal are administration rather than command, because that
+ * is what a server manager reads them as in the setup panel, and they are
+ * still typed as commands.
+ */
 function commandFeatures(features: readonly Feature[]): Feature[] {
-  return features.filter(feature => feature.category === 'command' && feature.command);
+  return features.filter(feature => feature.command);
+}
+
+/**
+ * The names one feature is reached by, the declared one first. A feature with
+ * two names becomes two commands over one implementation, which is how setup
+ * and config open the same panels.
+ */
+function namesOf(command: FeatureCommand): { name: string; description: string }[] {
+  return [
+    { name: command.name, description: command.description },
+    ...(command.alternateNames ?? []).map(alternate => ({ ...alternate })),
+  ];
+}
+
+function optionJson(option: FeatureCommandOption): CommandOptionJson {
+  const built: CommandOptionJson = {
+    type: OPTION_TYPES[option.kind],
+    name: option.name,
+    description: option.description,
+    required: Boolean(option.required),
+  };
+  if (option.autocomplete) built.autocomplete = true;
+  if (option.choices) built.choices = option.choices.map(choice => ({ ...choice }));
+  return built;
+}
+
+function optionsJson(command: FeatureCommand): CommandOptionJson[] | undefined {
+  if (!command.options || command.options.length === 0) return undefined;
+
+  // Discord refuses a whole command whose required options do not come first,
+  // and refuses it at startup with a message about an option index. Catching
+  // it here names the command instead.
+  const firstOptional = command.options.findIndex(option => !option.required);
+  const lastRequired = command.options.map(option => Boolean(option.required)).lastIndexOf(true);
+  if (firstOptional !== -1 && lastRequired > firstOptional) {
+    throw new Error(`The command ${command.name} has a required option after an optional one, which Discord refuses.`);
+  }
+
+  return command.options.map(optionJson);
 }
 
 function contextsOf(features: readonly Feature[]): InteractionContextType[] {
@@ -82,21 +146,28 @@ export function buildCommands(features: readonly Feature[] = allFeatures): Comma
 
   const seen = new Set<string>();
   for (const feature of declared) {
-    const name = feature.command!.name;
-    if (seen.has(name)) throw new Error(`There is more than one command named ${name}.`);
-    seen.add(name);
+    for (const { name } of namesOf(feature.command!)) {
+      if (seen.has(name)) throw new Error(`There is more than one command named ${name}.`);
+      seen.add(name);
+    }
   }
 
   const topLevel = declared.filter(feature => !GROUPED_TIERS.has(feature.tier));
   const grouped = declared.filter(feature => GROUPED_TIERS.has(feature.tier));
 
-  const commands: CommandJson[] = topLevel.map(feature => ({
-    type: ApplicationCommandType.ChatInput,
-    name: feature.command!.name,
-    description: feature.command!.description,
-    contexts: contextsOf([feature]),
-    integration_types: integrationTypesOf([feature]),
-  }));
+  const commands: CommandJson[] = topLevel.flatMap(feature =>
+    namesOf(feature.command!).map(({ name, description }) => {
+      const command: CommandJson = {
+        type: ApplicationCommandType.ChatInput,
+        name,
+        description,
+        contexts: contextsOf([feature]),
+        integration_types: integrationTypesOf([feature]),
+      };
+      const options = optionsJson(feature.command!);
+      if (options) command.options = options;
+      return command;
+    }));
 
   if (grouped.length > 0) {
     commands.push({
@@ -105,11 +176,17 @@ export function buildCommands(features: readonly Feature[] = allFeatures): Comma
       description: VIA_GROUP_DESCRIPTION,
       contexts: contextsOf(grouped),
       integration_types: integrationTypesOf(grouped),
-      options: grouped.map(feature => ({
-        type: ApplicationCommandOptionType.Subcommand,
-        name: feature.command!.name,
-        description: feature.command!.description,
-      })),
+      options: grouped.flatMap(feature =>
+        namesOf(feature.command!).map(({ name, description }) => {
+          const subcommand: CommandOptionJson = {
+            type: ApplicationCommandOptionType.Subcommand,
+            name,
+            description,
+          };
+          const options = optionsJson(feature.command!);
+          if (options) subcommand.options = options;
+          return subcommand;
+        })),
     });
   }
 

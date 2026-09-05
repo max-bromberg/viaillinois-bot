@@ -1,6 +1,6 @@
 import { featureById } from '../features/registry.ts';
 import { ViaBusyError, ViaError } from '../via/client.ts';
-import { describeWait, type CommandContext, type CommandHandler } from './types.ts';
+import { describeWait, type CommandContext, type CommandHandler, type ComponentHandler } from './types.ts';
 import type { Interaction, Reply } from '../discord/adapter.ts';
 
 /**
@@ -101,4 +101,21 @@ export const linkCommand: CommandHandler = {
       }],
     };
   },
+};
+
+/**
+ * The link button.
+ *
+ * Several answers end in a person who has no VIA account being offered a Link
+ * button: the reminder and interest buttons on an event card, the follow
+ * button on an organization card, and the refusal a manager reads when binding
+ * a server needs an account they do not have. The button does exactly what the
+ * command does, because a button that told somebody to go and type a command
+ * instead would be a button that does nothing.
+ */
+export const linkComponent: ComponentHandler = {
+  featureId: feature.id,
+  prefix: 'identity:link',
+  ephemeral: true,
+  run: (interaction: Interaction, context: CommandContext) => linkCommand.run(interaction, context),
 };

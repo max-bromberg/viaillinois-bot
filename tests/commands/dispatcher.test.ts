@@ -173,3 +173,152 @@ describe('the tier a command is counted against', () => {
     expect((consumed[0]!.tier satisfies RateTier)).toBe('unlinked');
   });
 });
+
+/**
+ * Autocomplete and the components the bot's own answers carry.
+ *
+ * An autocomplete arrives on every keystroke and is answered with a list of
+ * completions rather than a message, and a component arrives when somebody
+ * presses a button the bot posted. Both go through the same dispatcher, and
+ * both are routed by the adapter rather than by anything that knows about
+ * discord.js.
+ */
+function rawAutocomplete(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '111111111111111111',
+    type: InteractionType.ApplicationCommandAutocomplete,
+    commandName: 'events',
+    user: { id: '204255221017214977' },
+    guildId: '900000000000000001',
+    channelId: '900000000000000002',
+    context: InteractionContextType.Guild,
+    options: { data: [{ name: 'rso', type: 3, value: 'ie', focused: true }] },
+    respond: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+function rawComponent(overrides: Record<string, unknown> = {}) {
+  const raw: Record<string, unknown> = {
+    id: '111111111111111111',
+    type: InteractionType.MessageComponent,
+    componentType: 2,
+    customId: 'events:open:10',
+    user: { id: '204255221017214977' },
+    guildId: '900000000000000001',
+    channelId: '900000000000000002',
+    context: InteractionContextType.Guild,
+    values: [],
+    deferred: false,
+    replied: false,
+    deferReply: vi.fn(async () => { raw.deferred = true; }),
+    deferUpdate: vi.fn(async () => { raw.deferred = true; }),
+    update: vi.fn(),
+    reply: vi.fn(),
+    editReply: vi.fn(),
+    followUp: vi.fn(),
+    ...overrides,
+  };
+  return raw;
+}
+
+describe('completing an option as a person types', () => {
+  it('answers with the completions the command produced', async () => {
+    const { context } = testContext();
+    const raw = rawAutocomplete();
+    await createDispatcher(context)(raw);
+    expect(raw.respond).toHaveBeenCalledWith([{ name: 'IEEE', value: '1' }]);
+  });
+
+  /**
+   * An autocomplete fires on every keystroke, so counting it against the
+   * command limit would refuse a person for typing a name. The reads behind it
+   * are the cached ones, which is what makes that affordable.
+   */
+  it('counts an autocomplete against nobody', async () => {
+    const { context, consumed } = testContext();
+    await createDispatcher(context)(rawAutocomplete());
+    expect(consumed).toEqual([]);
+  });
+
+  it('answers with nothing for a command that completes nothing', async () => {
+    const { context } = testContext();
+    const raw = rawAutocomplete({ commandName: 'link' });
+    await createDispatcher(context)(raw);
+    expect(raw.respond).toHaveBeenCalledWith([]);
+  });
+
+  it('answers with nothing rather than throwing when completing fails', async () => {
+    const { context, via } = testContext();
+    via.failNextWith(new Error('the web platform fell over'));
+    const raw = rawAutocomplete();
+    await expect(createDispatcher(context)(raw)).resolves.toBeUndefined();
+    expect(raw.respond).toHaveBeenCalledWith([]);
+  });
+});
+
+describe('pressing a button the bot posted', () => {
+  it('routes the button to the handler whose prefix it carries', async () => {
+    const { context } = testContext();
+    const raw = rawComponent();
+    await createDispatcher(context)(raw);
+    const answer = (raw.editReply as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { content: string };
+    expect(answer.content).toContain('General meeting');
+  });
+
+  it('edits the message the button sits on when the handler says so', async () => {
+    const { context } = testContext();
+    const raw = rawComponent();
+    await createDispatcher(context)(raw);
+    expect(raw.deferUpdate).toHaveBeenCalled();
+    expect(raw.deferReply).not.toHaveBeenCalled();
+  });
+
+  it('answers a button that does not edit in place with a new message only that person sees', async () => {
+    const { context } = testContext();
+    const raw = rawComponent({ customId: 'event:calendar:10' });
+    await createDispatcher(context)(raw);
+    expect(raw.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+
+  it('counts a button against the person and against the server, as a command is', async () => {
+    const { context, consumed } = testContext();
+    await createDispatcher(context)(rawComponent());
+    expect(consumed).toEqual([
+      { subject: 'user:204255221017214977', tier: 'unlinked' },
+      { subject: 'guild:900000000000000001', tier: 'guild' },
+    ]);
+  });
+
+  it('refuses a button from a person over their limit, with the sentence naming the wait', async () => {
+    const { context } = testContext({ decide: () => refuse(30) });
+    const raw = rawComponent();
+    await createDispatcher(context)(raw);
+    expect(raw.reply).toHaveBeenCalledWith({
+      content: 'You have run too many VIA commands in the last hour. Please try again in 30 seconds.',
+      flags: MessageFlags.Ephemeral,
+      components: [],
+    });
+  });
+
+  it('leaves a component nothing answers alone', async () => {
+    const { context, consumed } = testContext();
+    const raw = rawComponent({ customId: 'nothing:answers:this' });
+    await expect(createDispatcher(context)(raw)).resolves.toBeUndefined();
+    expect(raw.reply).not.toHaveBeenCalled();
+    expect(consumed).toEqual([]);
+  });
+
+  it('routes a menu as readily as a button', async () => {
+    const { context, guilds } = testContext();
+    await guilds.createInstallation('900000000000000001', '204255221017214977');
+    const raw = rawComponent({
+      componentType: 3,
+      customId: 'setup:kind',
+      values: ['community'],
+      memberPermissions: { bitfield: 32n },
+    });
+    await createDispatcher(context)(raw);
+    expect((await guilds.getInstallation('900000000000000001'))!.kind).toBe('community');
+  });
+});

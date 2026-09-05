@@ -29,11 +29,19 @@ const stamp = (name: string) =>
  * what it is bound to, who ran setup and when, and the per server settings
  * that are not feature toggles. A binding of `set` is spelled out in
  * Guild_Followed_Rsos, and a binding of `rso` names the one RSO here.
+ *
+ * Kind and binding are both nullable, and both are null from the moment the
+ * bot joins a server until a manager answers for it in setup. The design
+ * says that nothing is posted and no channel is touched until setup has run,
+ * so a server that was never asked what it is has to read back as one that
+ * was never asked. Filling either column with a value the manager did not
+ * choose would make a server that has answered nothing indistinguishable
+ * from one that answered, which is the state the rest of the bot branches on.
  */
 export const guildInstallations = mysqlTable('Guild_Installations', {
   guildId: snowflake('guild_id').notNull(),
-  kind: mysqlEnum('kind', ['rso', 'community']).notNull(),
-  binding: mysqlEnum('binding', ['rso', 'all', 'set']).notNull(),
+  kind: mysqlEnum('kind', ['rso', 'community']),
+  binding: mysqlEnum('binding', ['rso', 'all', 'set']),
   rsoId: int('rso_id'),
   installedBy: snowflake('installed_by').notNull(),
   installedAt: stamp('installed_at'),

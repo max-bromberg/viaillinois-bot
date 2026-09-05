@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ViaError, ViaBusyError, parseLinkSession, parseLinkedAccount,
-  type ViaClient, type ViaErrorCode, type LinkSession, type LinkedAccount,
+  ViaError, ViaBusyError, eventQueryParams,
+  parseEvent, parseEventPage, parseLinkSession, parseLinkedAccount, parseRsoWithEvents, parseRsos,
+  type ViaClient, type ViaErrorCode, type EventPage, type EventQuery, type LinkSession,
+  type LinkedAccount, type Rso, type RsoWithEvents, type ViaEvent,
 } from './client.ts';
 
 /**
@@ -63,17 +65,21 @@ export interface ViaHttpOptions {
 }
 
 /**
- * The HTTP client. Beside the four methods of the interface it exposes the
- * request seam they are built on, which is where the endpoints of the later
- * increments will be added.
+ * The HTTP client. Beside the methods of the interface it exposes the two
+ * request seams they are built on, which is where the endpoints of the later
+ * increments are added.
  */
 export interface ViaHttpClient extends ViaClient {
   request<T>(request: ViaRequest): Promise<T>;
+  /** The answer as text, for the calendar endpoint, which does not send JSON. */
+  requestText(request: ViaRequest): Promise<string>;
 }
 
 interface Answer {
   status: number;
   body: unknown;
+  /** The answer as it arrived, for the one endpoint that is not JSON. */
+  text: string;
   retryAfterSeconds: number | null;
   requestId: string;
 }
@@ -152,6 +158,7 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
     return {
       status: response.status,
       body,
+      text,
       retryAfterSeconds: response.status === 503 ? retryAfterOf(response.headers.get('Retry-After'), body) : null,
       requestId,
     };
@@ -194,6 +201,12 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
     return refuse(answer);
   }
 
+  async function requestText(req: ViaRequest): Promise<string> {
+    const answer = await attempt(req);
+    if (answer.status >= 200 && answer.status < 300) return answer.text;
+    return refuse(answer);
+  }
+
   /** An answer of 404 that means absence rather than failure, for the lookups that allow it. */
   async function requestOrAbsent<T>(req: ViaRequest): Promise<T | null> {
     const answer = await attempt(req);
@@ -204,6 +217,7 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
 
   return {
     request,
+    requestText,
 
     async openLinkSession(discordUserId: string): Promise<LinkSession> {
       const body = await request<unknown>({
@@ -232,6 +246,63 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
       if (answer.status === 404) return false;
       if (answer.status >= 200 && answer.status < 300) return true;
       return refuse(answer);
+    },
+
+    async listRsos(): Promise<Rso[]> {
+      return parseRsos(await request<unknown>({ method: 'GET', path: '/rsos' }));
+    },
+
+    async getRso(rsoId: number, actingDiscordUserId?: string): Promise<RsoWithEvents | null> {
+      const body = await requestOrAbsent<unknown>({
+        method: 'GET',
+        path: `/rsos/${encodeURIComponent(String(rsoId))}`,
+        actingDiscordUserId,
+      });
+      return body === null ? null : parseRsoWithEvents(body);
+    },
+
+    async listEvents(query: EventQuery): Promise<EventPage> {
+      const body = await request<unknown>({
+        method: 'GET',
+        path: `/events?${eventQueryParams(query).toString()}`,
+        actingDiscordUserId: query.actingDiscordUserId,
+      });
+      return parseEventPage(body);
+    },
+
+    /**
+     * An event a person may not see is answered with the same 404 as an event
+     * that does not exist, which is what the reading router does deliberately,
+     * so there is one absent answer here rather than two.
+     */
+    async getEvent(eventId: number, actingDiscordUserId?: string): Promise<ViaEvent | null> {
+      const body = await requestOrAbsent<{ event?: unknown }>({
+        method: 'GET',
+        path: `/events/${encodeURIComponent(String(eventId))}`,
+        actingDiscordUserId,
+      });
+      return body === null ? null : parseEvent(body.event);
+    },
+
+    async getEventCalendar(eventId: number): Promise<string> {
+      return requestText({
+        method: 'GET',
+        path: `/events/${encodeURIComponent(String(eventId))}/calendar`,
+      });
+    },
+
+    /**
+     * Binding is the one setup step the web platform decides. The bot sends
+     * the organization and the person, and reads the refusal rather than
+     * working out for itself who sits on which board.
+     */
+    async confirmBinding(rsoId: number, actingDiscordUserId: string): Promise<void> {
+      await request<unknown>({
+        method: 'POST',
+        path: '/guilds/bindings/confirm',
+        body: { rso_id: rsoId },
+        actingDiscordUserId,
+      });
     },
 
     /**

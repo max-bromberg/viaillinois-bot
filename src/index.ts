@@ -5,7 +5,10 @@ import { startHealthServer } from './health.ts';
 import { db, pool } from './db/client.ts';
 import { currentVersion } from './db/migrate.ts';
 import { createViaHttpClient } from './via/http.ts';
+import { withHotReadCache } from './via/cache.ts';
 import { createGateway } from './discord/client.ts';
+import { createGuildStore } from './guilds/store.ts';
+import { createGuildLifecycle } from './guilds/lifecycle.ts';
 import { createDirectMessageSender } from './discord/directMessages.ts';
 import { buildCommands, putCommands } from './discord/registerCommands.ts';
 import { createRateWindows } from './ratelimit/windows.ts';
@@ -28,10 +31,18 @@ const { version } = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 const config = loadConfig();
 
-const via = createViaHttpClient({
+/**
+ * The web platform client, with the two hot reads cached for a minute. The
+ * cache sits outside the HTTP client so that everything past this line, the
+ * commands and the autocomplete alike, reads through it.
+ */
+const via = withHotReadCache(createViaHttpClient({
   baseUrl: config.viaInternalUrl,
   serviceToken: config.botServiceToken,
-});
+}));
+
+const guilds = createGuildStore(db);
+const guildLifecycle = createGuildLifecycle({ guilds });
 
 const rateWindows = createRateWindows({ db, limits: config.rateLimits });
 
@@ -47,10 +58,14 @@ function schedule(task: () => Promise<void>): void {
 const gateway = createGateway({
   token: config.discordToken,
   dispatch: raw => dispatch(raw),
+  onGuildCreate: raw => guildLifecycle.onGuildCreate(raw),
+  onGuildDelete: raw => guildLifecycle.onGuildDelete(raw),
 });
 
 const dispatch = createDispatcher({
   via,
+  guilds,
+  websiteUrl: config.viaPublicUrl,
   rateWindows,
   deleteLocalData: discordUserId => deleteLocalData(db, discordUserId),
   sendDirectMessage: async (discordUserId, content) => {

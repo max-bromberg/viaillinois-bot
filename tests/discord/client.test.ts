@@ -96,3 +96,54 @@ describe('the gateway client', () => {
     expect(client.destroy).toHaveBeenCalled();
   });
 });
+
+describe('the gateway and the servers it is in', () => {
+  it('hands a server it joined to the lifecycle, raw, for the adapter to read', async () => {
+    const joined: unknown[] = [];
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      onGuildCreate: async (raw: unknown) => { joined.push(raw); },
+      createClient: () => client as never,
+    });
+    const guild = { id: '900000000000000001', ownerId: '204255221017214977', available: true };
+    await client.fire(Events.GuildCreate, guild);
+    expect(joined).toEqual([guild]);
+  });
+
+  it('hands a server it left to the lifecycle', async () => {
+    const left: unknown[] = [];
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      onGuildDelete: async (raw: unknown) => { left.push(raw); },
+      createClient: () => client as never,
+    });
+    const guild = { id: '900000000000000001', ownerId: '204255221017214977', available: true };
+    await client.fire(Events.GuildDelete, guild);
+    expect(left).toEqual([guild]);
+  });
+
+  it('stays connected when handling a server throws', async () => {
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      onGuildCreate: async () => { throw new Error('the database fell over'); },
+      createClient: () => client as never,
+    });
+    await expect(client.fire(Events.GuildCreate, { id: '900000000000000001' })).resolves.toBeUndefined();
+  });
+
+  it('connects without a lifecycle at all, for a run that has none', async () => {
+    const client = fakeClient();
+    createGateway({
+      token: 'discord-token',
+      dispatch: vi.fn(async () => {}),
+      createClient: () => client as never,
+    });
+    await expect(client.fire(Events.GuildCreate, { id: '900000000000000001' })).resolves.toBeUndefined();
+  });
+});

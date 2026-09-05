@@ -26,6 +26,7 @@ describe('loadConfig', () => {
       discordApplicationId: '123456789012345678',
       discordPublicKey: 'public-key',
       viaInternalUrl: 'http://via:3001',
+      viaPublicUrl: 'https://viaillinois.com',
       botServiceToken: 'service-token',
       database: {
         host: 'via-db',
@@ -83,6 +84,24 @@ describe('loadConfig', () => {
       expect(() => loadConfig(env)).toThrow(name);
     });
   }
+
+  it('defaults the public address to the website VIA actually runs at', () => {
+    const env = fullEnvironment();
+    delete env.VIA_PUBLIC_URL;
+    expect(loadConfig(env).viaPublicUrl).toBe('https://viaillinois.com');
+  });
+
+  it('takes a public address of its own, so a development bot links to a development website', () => {
+    const env = fullEnvironment();
+    env.VIA_PUBLIC_URL = 'http://localhost:5173';
+    expect(loadConfig(env).viaPublicUrl).toBe('http://localhost:5173');
+  });
+
+  it('refuses a public address that is not an http or https one', () => {
+    const env = fullEnvironment();
+    env.VIA_PUBLIC_URL = 'viaillinois.com';
+    expect(() => loadConfig(env)).toThrow('VIA_PUBLIC_URL');
+  });
 
   it('defaults the health port to 3002 when HEALTH_PORT is not set', () => {
     const env = fullEnvironment();

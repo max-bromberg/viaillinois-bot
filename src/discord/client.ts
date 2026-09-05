@@ -22,6 +22,14 @@ export interface GatewayOptions {
   dispatch: (interaction: unknown) => Promise<void>;
   /** Told the bot user tag once the connection is up, for the startup log. */
   onReady?: (tag: string) => void;
+  /**
+   * Told about a server the bot is in, raw, whenever the gateway announces
+   * one. That is every server on every connection, not only the ones just
+   * joined, so what is done with it has to be safe to do again.
+   */
+  onGuildCreate?: (raw: unknown) => Promise<void>;
+  /** Told about a server the bot has left or that has gone down. */
+  onGuildDelete?: (raw: unknown) => Promise<void>;
   /** Injected by tests, which pass a client that connects to nothing. */
   createClient?: (options: ClientOptions) => Client;
 }
@@ -40,6 +48,8 @@ export function createGateway(options: GatewayOptions): BotGateway {
     token,
     dispatch,
     onReady,
+    onGuildCreate,
+    onGuildDelete,
     createClient = (clientOptions: ClientOptions) => new Client(clientOptions),
   } = options;
 
@@ -54,6 +64,24 @@ export function createGateway(options: GatewayOptions): BotGateway {
   client.on(Events.Error, (err: Error) => {
     console.error('gateway error:', err.message);
   });
+
+  /**
+   * One server failing must not take the connection down, exactly as one
+   * command failing must not. There is nobody to answer here, so the failure
+   * is logged and the next server is handled.
+   */
+  const guard = (what: string, handle?: (raw: unknown) => Promise<void>) =>
+    async (raw: unknown) => {
+      if (!handle) return;
+      try {
+        await handle(raw);
+      } catch (err) {
+        console.error(`${what} failed:`, (err as Error).message);
+      }
+    };
+
+  client.on(Events.GuildCreate, guard('handling a server the bot is in', onGuildCreate));
+  client.on(Events.GuildDelete, guard('handling a server the bot has left', onGuildDelete));
 
   client.on(Events.InteractionCreate, async (interaction: unknown) => {
     try {

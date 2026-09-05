@@ -25,14 +25,50 @@ function feature(overrides: Partial<Feature>): Feature {
 }
 
 describe('building the application commands from the registry', () => {
-  it('registers the two identity commands the first increment has, at the top level', () => {
+  it('puts every student command at the top level and everything else under the via group', () => {
     const commands = buildCommands(features);
-    expect(commands.map(c => c.name).sort()).toEqual(['link', 'unlink']);
+    expect(commands.map(c => c.name).sort()).toEqual(['event', 'events', 'link', 'rso', 'unlink', VIA_GROUP]);
     for (const command of commands) {
       expect(command.type).toBe(ApplicationCommandType.ChatInput);
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.description.length).toBeLessThanOrEqual(100);
     }
+  });
+
+  it('gives the via group the setup, config and remove subcommands', () => {
+    const group = buildCommands(features).find(c => c.name === VIA_GROUP)!;
+    expect(group.options!.map(o => o.name)).toEqual(['setup', 'config', 'remove']);
+    for (const option of group.options!) {
+      expect(option.type).toBe(ApplicationCommandOptionType.Subcommand);
+    }
+  });
+
+  it('carries a subcommand\'s own options under it', () => {
+    const group = buildCommands(features).find(c => c.name === VIA_GROUP)!;
+    const setup = group.options!.find(o => o.name === 'setup')!;
+    expect(setup.options!.map(o => o.name)).toEqual(['rso']);
+    expect(setup.options![0]!.autocomplete).toBe(true);
+  });
+
+  it('builds the options of the events command as Discord describes them', () => {
+    const events = buildCommands(features).find(c => c.name === 'events')!;
+    expect(events.options!.map(o => o.name)).toEqual(['rso', 'window', 'internal']);
+
+    const [rso, window, internal] = events.options!;
+    expect(rso!.type).toBe(ApplicationCommandOptionType.String);
+    expect(rso!.autocomplete).toBe(true);
+    expect(rso!.required).toBe(false);
+
+    expect(window!.choices!.map(c => c.value)).toEqual(['today', 'thisweek', 'nextweek', 'thismonth']);
+    expect(window!.autocomplete).toBeUndefined();
+
+    expect(internal!.type).toBe(ApplicationCommandOptionType.Boolean);
+  });
+
+  it('marks an option the command cannot run without as required', () => {
+    const event = buildCommands(features).find(c => c.name === 'event')!;
+    expect(event.options![0]!.name).toBe('event');
+    expect(event.options![0]!.required).toBe(true);
   });
 
   it('opens a student command to both installation contexts and all three places', () => {
@@ -84,15 +120,83 @@ describe('building the application commands from the registry', () => {
   });
 
   it('leaves the via group out entirely while nothing sits under it', () => {
-    expect(buildCommands(features).map(c => c.name)).not.toContain(VIA_GROUP);
+    const commands = buildCommands([feature({})]);
+    expect(commands.map(c => c.name)).not.toContain(VIA_GROUP);
   });
 
-  it('ignores a feature that is not a command and a command feature with no command declared', () => {
+  it('reaches one manager feature by both of its names', () => {
+    const commands = buildCommands([feature({
+      id: 'setup.configure',
+      category: 'administration',
+      tier: 'manager',
+      contexts: ['guild'],
+      command: {
+        name: 'setup',
+        description: 'Set the bot up in this server.',
+        alternateNames: [{ name: 'config', description: 'Change how the bot is set up.' }],
+      },
+    })]);
+    const group = commands.find(c => c.name === VIA_GROUP)!;
+    expect(group.options!.map(o => o.name)).toEqual(['setup', 'config']);
+    expect(group.options![1]!.description).toBe('Change how the bot is set up.');
+  });
+
+  it('reaches one student feature by both of its names, at the top level', () => {
+    const commands = buildCommands([feature({
+      command: {
+        name: 'events',
+        description: 'See what is coming up.',
+        alternateNames: [{ name: 'upcoming', description: 'See what is coming up.' }],
+      },
+    })]);
+    expect(commands.map(c => c.name)).toEqual(['events', 'upcoming']);
+  });
+
+  it('refuses an alternate name that is already another command', () => {
+    expect(() => buildCommands([
+      feature({ id: 'events.list', command: { name: 'events', description: 'See what is coming up.' } }),
+      feature({
+        id: 'rsos.detail',
+        command: {
+          name: 'rso',
+          description: 'Show one organization.',
+          alternateNames: [{ name: 'events', description: 'See what is coming up.' }],
+        },
+      }),
+    ])).toThrow('There is more than one command named events.');
+  });
+
+  it('ignores a feature that declares no command, whatever its category', () => {
     const commands = buildCommands([
       feature({ id: 'events.announce', category: 'proactive', channelPurposes: ['announcements'], command: undefined }),
       feature({ id: 'roles.linked', category: 'roles', command: undefined }),
     ]);
     expect(commands).toEqual([]);
+  });
+
+  it('registers an administration feature that does declare a command', () => {
+    const commands = buildCommands([feature({
+      id: 'setup.remove',
+      category: 'administration',
+      tier: 'manager',
+      contexts: ['guild'],
+      command: { name: 'remove', description: 'Remove the bot from this server.' },
+    })]);
+    expect(commands.map(c => c.name)).toEqual([VIA_GROUP]);
+    expect(commands[0]!.options!.map(o => o.name)).toEqual(['remove']);
+  });
+
+  it('refuses a command whose required option comes after an optional one', () => {
+    expect(() => buildCommands([feature({
+      command: {
+        name: 'events',
+        description: 'See what is coming up.',
+        options: [
+          { name: 'window', description: 'How far ahead to look.', kind: 'string' },
+          { name: 'rso', description: 'One organization.', kind: 'string', required: true },
+        ],
+      },
+    })])).toThrow('The command events has a required option after an optional one, which Discord refuses.');
   });
 
   it('refuses two commands with the same name, because Discord would take only one', () => {
@@ -121,6 +225,6 @@ describe('putting the commands to Discord', () => {
       applicationId: '123456789012345678',
       commands: buildCommands(features),
     });
-    expect(count).toBe(2);
+    expect(count).toBe(6);
   });
 });

@@ -32,6 +32,8 @@ export interface BotConfig {
   discordApplicationId: string;
   discordPublicKey: string;
   viaInternalUrl: string;
+  /** Where the website is, which every link button the bot posts opens. */
+  viaPublicUrl: string;
   botServiceToken: string;
   database: DatabaseConfig;
   healthPort: number;
@@ -54,6 +56,14 @@ export const REQUIRED_VARIABLES = [
 
 /** The port the health listener binds when HEALTH_PORT is not set. */
 export const DEFAULT_HEALTH_PORT = 3002;
+
+/**
+ * Where the website is when VIA_PUBLIC_URL is not set, which is where it
+ * actually runs. It is a variable rather than a constant so that a developer
+ * running against a local web platform gets link buttons that open their own
+ * copy rather than production.
+ */
+export const DEFAULT_VIA_PUBLIC_URL = 'https://viaillinois.com';
 
 /**
  * The rate limits a deployment that names none of them runs with. A student
@@ -118,12 +128,16 @@ export function loadConfig(env: Environment = process.env): BotConfig {
   for (const name of REQUIRED_VARIABLES) required(env, name);
 
   const healthPortRaw = env.HEALTH_PORT?.trim();
+  const publicUrlRaw = env.VIA_PUBLIC_URL?.trim();
 
   return {
     discordToken: required(env, 'DISCORD_TOKEN'),
     discordApplicationId: required(env, 'DISCORD_APPLICATION_ID'),
     discordPublicKey: required(env, 'DISCORD_PUBLIC_KEY'),
     viaInternalUrl: httpAddress('VIA_INTERNAL_URL', required(env, 'VIA_INTERNAL_URL')),
+    viaPublicUrl: publicUrlRaw
+      ? httpAddress('VIA_PUBLIC_URL', publicUrlRaw)
+      : DEFAULT_VIA_PUBLIC_URL,
     botServiceToken: required(env, 'BOT_SERVICE_TOKEN'),
     database: {
       host: required(env, 'DB_HOST'),
