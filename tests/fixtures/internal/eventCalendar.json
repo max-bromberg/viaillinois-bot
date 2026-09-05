@@ -1,0 +1,4 @@
+{
+  "content_type": "text/calendar; charset=utf-8",
+  "body": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//VIA//Virtually Integrated Agenda//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nBEGIN:VEVENT\r\nUID:via-event-10@viaillinois.com\r\nDTSTAMP:20260905T170000Z\r\nDTSTART;TZID=America/Chicago:20260910T180000\r\nDTEND;TZID=America/Chicago:20260910T190000\r\nSUMMARY:General meeting\r\nDESCRIPTION:Bring a laptop.\r\nLOCATION:Electrical & Computer Eng Bldg 1002 (Use the north entrance.)\r\nSTATUS:CONFIRMED\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+}

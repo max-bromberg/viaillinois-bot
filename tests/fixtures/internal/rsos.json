@@ -1,0 +1,10 @@
+{
+  "rsos": [
+    {
+      "rso_id": 1,
+      "name": "IEEE",
+      "description": "The student branch at Illinois.",
+      "logo_color": "#13294B"
+    }
+  ]
+}

@@ -15,6 +15,18 @@ export interface DatabaseConfig {
   database: string;
 }
 
+/**
+ * The sliding window limits from section 9 of the design. They have defaults
+ * because a deployment should not have to think about them, and they are
+ * readable from the environment because a deployment that is being abused
+ * should not have to wait for a release to tighten them.
+ */
+export interface RateLimitConfig {
+  unlinkedPerHour: number;
+  linkedPerHour: number;
+  guildPerHour: number;
+}
+
 export interface BotConfig {
   discordToken: string;
   discordApplicationId: string;
@@ -23,6 +35,7 @@ export interface BotConfig {
   botServiceToken: string;
   database: DatabaseConfig;
   healthPort: number;
+  rateLimits: RateLimitConfig;
 }
 
 /** The variables that have no default, in the order the deployment document lists them. */
@@ -42,6 +55,19 @@ export const REQUIRED_VARIABLES = [
 /** The port the health listener binds when HEALTH_PORT is not set. */
 export const DEFAULT_HEALTH_PORT = 3002;
 
+/**
+ * The rate limits a deployment that names none of them runs with. A student
+ * running commands hand over hand reaches the unlinked limit in about a
+ * minute of deliberate effort and never reaches it by using the bot, and the
+ * server ceiling is high enough that a busy server during an event week never
+ * sees it.
+ */
+export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
+  unlinkedPerHour: 30,
+  linkedPerHour: 120,
+  guildPerHour: 600,
+};
+
 type Environment = Record<string, string | undefined>;
 
 function required(env: Environment, name: string): string {
@@ -55,6 +81,18 @@ function required(env: Environment, name: string): string {
 function port(name: string, raw: string): number {
   if (!/^\d{1,5}$/.test(raw) || Number(raw) > 65535) {
     throw new Error(`The environment variable ${name} must be a port number, and "${raw}" is not one.`);
+  }
+  return Number(raw);
+}
+
+/** A limit is a whole number of commands, and one that is not positive refuses everybody. */
+function commandsPerHour(env: Environment, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  if (!/^\d{1,7}$/.test(raw) || Number(raw) === 0) {
+    throw new Error(
+      `The environment variable ${name} must be a whole number of commands per hour, and "${raw}" is not one.`
+    );
   }
   return Number(raw);
 }
@@ -95,5 +133,10 @@ export function loadConfig(env: Environment = process.env): BotConfig {
       database: required(env, 'BOT_DB_NAME'),
     },
     healthPort: healthPortRaw ? port('HEALTH_PORT', healthPortRaw) : DEFAULT_HEALTH_PORT,
+    rateLimits: {
+      unlinkedPerHour: commandsPerHour(env, 'RATE_LIMIT_UNLINKED_PER_HOUR', DEFAULT_RATE_LIMITS.unlinkedPerHour),
+      linkedPerHour: commandsPerHour(env, 'RATE_LIMIT_LINKED_PER_HOUR', DEFAULT_RATE_LIMITS.linkedPerHour),
+      guildPerHour: commandsPerHour(env, 'RATE_LIMIT_GUILD_PER_HOUR', DEFAULT_RATE_LIMITS.guildPerHour),
+    },
   };
 }

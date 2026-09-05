@@ -1,0 +1,11 @@
+{
+  "discord_user_id": "204255221017214977",
+  "net_id": "rgarcia7",
+  "display_name": "Rosa Garcia",
+  "is_global_admin": false,
+  "linked_at": "2026-09-04T18:32:11-05:00",
+  "memberships": [
+    { "rso_id": 4, "rso_name": "IEEE Student Branch", "role": "board" },
+    { "rso_id": 9, "rso_name": "HKN", "role": "member" }
+  ]
+}

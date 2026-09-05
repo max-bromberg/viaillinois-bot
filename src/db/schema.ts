@@ -216,6 +216,12 @@ export const outboxCursor = mysqlTable('Outbox_Cursor', {
  * minute, summed over the last hour when a command arrives. The subject is
  * `user:` or `guild:` followed by the snowflake. Rows are pruned after ninety
  * days, and in practice after an hour.
+ *
+ * Bucket_start is the one datetime column in this database that holds UTC
+ * rather than campus wall clock. A window is a duration, and a duration
+ * cannot be measured on a clock that repeats an hour in November and skips
+ * one in March. Nobody reads this column, so nothing is lost by keeping it on
+ * a clock that only ever moves forward. See src/ratelimit/windows.ts.
  */
 export const rateWindows = mysqlTable('Rate_Windows', {
   subject: varchar('subject', { length: 64 }).notNull(),

@@ -1,0 +1,16 @@
+{
+  "midterms": [
+    {
+      "midterm_id": 20,
+      "course_code": "ECE 385",
+      "course_title": "Digital Systems Laboratory",
+      "title": "Midterm 1",
+      "start_time": "2026-10-01T19:00:00-05:00",
+      "end_time": "2026-10-01T21:00:00-05:00",
+      "status": "Confirmed",
+      "location_text": null,
+      "building": "Everitt Laboratory",
+      "room_number": "151"
+    }
+  ]
+}

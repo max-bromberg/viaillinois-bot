@@ -33,6 +33,23 @@ export type InteractionContext = 'guild' | 'botDm' | 'privateChannel';
 /** A Discord permission, named as discord.js names it, so setup can say which grant is missing. */
 export type DiscordPermission = keyof typeof PermissionFlagsBits;
 
+/**
+ * The application command a feature is reached by, when it is reached by one.
+ *
+ * Where the command sits is not declared here, because it follows from the
+ * tier: the read and linked tiers are what students use, so those commands
+ * sit at the top level, and the editor and manager tiers are setup and board
+ * work, so those sit under the via group. The description is separate from
+ * the feature description because Discord allows a hundred characters and a
+ * server manager reading the setup panel deserves more than that.
+ */
+export interface FeatureCommand {
+  /** The name a person types, without the group. */
+  name: string;
+  /** What Discord shows beside the name, at most a hundred characters. */
+  description: string;
+}
+
 export interface Feature {
   /** Category and name separated by a dot, as the design lists them. */
   id: string;
@@ -49,6 +66,8 @@ export interface Feature {
   tier: FeatureTier;
   /** The contexts the feature can be used in. */
   contexts: readonly InteractionContext[];
+  /** The command the feature is reached by, when there is one. */
+  command?: FeatureCommand;
 }
 
 const EVERYWHERE: readonly InteractionContext[] = ['guild', 'botDm', 'privateChannel'];
@@ -63,6 +82,7 @@ export const features: readonly Feature[] = [
     channelPurposes: [],
     tier: 'read',
     contexts: EVERYWHERE,
+    command: { name: 'link', description: 'Link this Discord account to your VIA account.' },
   },
   {
     id: 'identity.unlink',
@@ -73,6 +93,7 @@ export const features: readonly Feature[] = [
     channelPurposes: [],
     tier: 'linked',
     contexts: EVERYWHERE,
+    command: { name: 'unlink', description: 'Remove the link between this Discord account and your VIA account.' },
   },
 ];
 

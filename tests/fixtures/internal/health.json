@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "version": "1.14.0",
+  "database": true,
+  "migrations": "0042_cancelled_events"
+}

@@ -35,8 +35,54 @@ describe('loadConfig', () => {
         database: 'via_bot',
       },
       healthPort: 3002,
+      rateLimits: {
+        unlinkedPerHour: 30,
+        linkedPerHour: 120,
+        guildPerHour: 600,
+      },
     });
   });
+
+  it('defaults every rate limit when none is named, to the numbers the design settled on', () => {
+    const env = fullEnvironment();
+    expect(loadConfig(env).rateLimits).toEqual({
+      unlinkedPerHour: 30,
+      linkedPerHour: 120,
+      guildPerHour: 600,
+    });
+  });
+
+  it('reads a rate limit a deployment chose to change', () => {
+    const env = fullEnvironment();
+    env.RATE_LIMIT_UNLINKED_PER_HOUR = '10';
+    env.RATE_LIMIT_LINKED_PER_HOUR = '200';
+    env.RATE_LIMIT_GUILD_PER_HOUR = '1000';
+    expect(loadConfig(env).rateLimits).toEqual({
+      unlinkedPerHour: 10,
+      linkedPerHour: 200,
+      guildPerHour: 1000,
+    });
+  });
+
+  for (const name of [
+    'RATE_LIMIT_UNLINKED_PER_HOUR',
+    'RATE_LIMIT_LINKED_PER_HOUR',
+    'RATE_LIMIT_GUILD_PER_HOUR',
+  ]) {
+    it(`refuses a ${name} that is not a whole number of commands`, () => {
+      const env = fullEnvironment();
+      env[name] = 'lots';
+      expect(() => loadConfig(env)).toThrow(
+        `The environment variable ${name} must be a whole number of commands per hour, and "lots" is not one.`
+      );
+    });
+
+    it(`refuses a ${name} of zero, because a limit of zero refuses everybody`, () => {
+      const env = fullEnvironment();
+      env[name] = '0';
+      expect(() => loadConfig(env)).toThrow(name);
+    });
+  }
 
   it('defaults the health port to 3002 when HEALTH_PORT is not set', () => {
     const env = fullEnvironment();

@@ -1,0 +1,11 @@
+{
+  "locations": [
+    {
+      "location_id": 5,
+      "building": "Electrical & Computer Eng Bldg",
+      "room_number": "1002",
+      "max_capacity": 40,
+      "has_av_equipment": 1
+    }
+  ]
+}
