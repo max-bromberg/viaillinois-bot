@@ -6,6 +6,16 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+- The bot reads all three shapes of repeat the web platform now holds. A repeat used to be
+  every so many weeks on the days chosen and nothing else; it can now also be a monthly
+  rule, on a date in the month or on a weekday of it, or a set of dates an organizer picked
+  one by one. A card that called all three "every week" would tell a student the wrong thing
+  about when to turn up, so the sentence describing a repeat covers all three, and the
+  series fields the two new shapes need are read alongside the ones already read. The same
+  change fixes a fault of the bot's own: the days of a repeat were matched against the two
+  letter spelling a calendar file uses, and VIA writes them as Sun through Sat, so every
+  weekly card and every series announcement had been dropping the days out of its sentence.
+
 - The first review of the whole of the first release, and the work it asked for. Deliveries
   are retried rather than treated as made, so a post Discord refused once is made when the
   entry or the hour comes round again, and the posts still owed at a restart are drained by
