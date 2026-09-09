@@ -144,6 +144,9 @@ export interface ViaEvent {
   seriesId: number | null;
   seriesFrequency: string | null;
   seriesIntervalWeeks: number | null;
+  seriesIntervalMonths: number | null;
+  seriesMonthDay: number | null;
+  seriesMonthWeek: number | null;
   seriesDaysOfWeek: string | null;
   seriesEndsOn: string | null;
   interestCount: number;
@@ -227,6 +230,9 @@ export interface ViaSeries {
   rsoId: number;
   frequency: string | null;
   intervalWeeks: number | null;
+  intervalMonths: number | null;
+  monthDay: number | null;
+  monthWeek: number | null;
   daysOfWeek: string | null;
   startsOn: string | null;
   endsOn: string | null;
@@ -646,6 +652,17 @@ function count(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
 
+/**
+ * A number that is allowed to be negative.
+ *
+ * count reads the fields that are counts of something and cannot be below zero.
+ * The position of a weekday in a month is not one of those: the last Friday of
+ * the month is written as -1, which is what a calendar program means by it.
+ */
+function signedCount(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
 export function parseRso(body: unknown): Rso {
   const raw = body as Record<string, unknown>;
   return {
@@ -676,6 +693,9 @@ export function parseEvent(body: unknown): ViaEvent {
     seriesId: count(raw.series_id),
     seriesFrequency: text(raw.series_frequency),
     seriesIntervalWeeks: count(raw.series_interval_weeks),
+    seriesIntervalMonths: count(raw.series_interval_months),
+    seriesMonthDay: count(raw.series_month_day),
+    seriesMonthWeek: signedCount(raw.series_month_week),
     seriesDaysOfWeek: text(raw.series_days_of_week),
     seriesEndsOn: text(raw.series_ends_on),
     interestCount: Number(raw.interest_count ?? 0),
@@ -726,6 +746,11 @@ export function parseSeries(body: unknown): ViaSeries {
     rsoId: Number(raw.rso_id),
     frequency: text(raw.frequency),
     intervalWeeks: count(raw.interval_weeks),
+    intervalMonths: count(raw.interval_months),
+    monthDay: count(raw.month_day),
+    // The last weekday of a month is written as -1, which is the one field here
+    // whose value is deliberately negative.
+    monthWeek: signedCount(raw.month_week),
     daysOfWeek: text(raw.days_of_week),
     startsOn: text(raw.starts_on),
     endsOn: text(raw.ends_on),

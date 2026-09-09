@@ -993,6 +993,12 @@ export function createFakeViaClient(): FakeViaClient {
           seriesId,
           seriesFrequency: 'weekly',
           seriesIntervalWeeks: request.recurrence.intervalWeeks,
+          // The scheduler only ever asks for a weekly repeat, so the fields the
+          // other two shapes use are empty here in the same way the web
+          // platform leaves them empty for a weekly rule.
+          seriesIntervalMonths: null,
+          seriesMonthDay: null,
+          seriesMonthWeek: null,
           seriesDaysOfWeek: [...request.recurrence.daysOfWeek].join(','),
           seriesEndsOn: endsOn,
           interestCount: 0,

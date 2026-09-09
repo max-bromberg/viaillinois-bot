@@ -138,10 +138,33 @@ export function whenOf(occasion: Timed): string {
   return relative ? `${range} (${relative})` : range;
 }
 
+/**
+ * The days, by every spelling that reaches the bot.
+ *
+ * VIA stores them as Sun through Sat, which is what the reading endpoints send.
+ * A calendar file writes them as two letters, and an entry that came from one
+ * can carry that spelling through, so both are read here rather than one of
+ * them being quietly dropped and the sentence losing its days.
+ */
 const DAY_NAMES: Record<string, string> = {
   SU: 'Sunday', MO: 'Monday', TU: 'Tuesday', WE: 'Wednesday',
   TH: 'Thursday', FR: 'Friday', SA: 'Saturday',
+  SUN: 'Sunday', MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday',
+  THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday',
 };
+
+/** Positions in a month, as somebody would say them out loud. */
+const MONTH_POSITIONS: Record<string, string> = {
+  '1': 'first', '2': 'second', '3': 'third', '4': 'fourth', '5': 'fifth', '-1': 'last',
+};
+
+/** A date of the month with its ending on it, so a sentence reads as one. */
+function ordinal(day: number): string {
+  const tens = day % 100;
+  if (tens >= 11 && tens <= 13) return `${day}th`;
+  const endings: Record<string, string> = { '1': 'st', '2': 'nd', '3': 'rd' };
+  return `${day}${endings[String(day % 10)] ?? 'th'}`;
+}
 
 /** A list in the words a person writes it in, so three days read as a sentence. */
 function joinWords(words: string[]): string {
@@ -150,10 +173,21 @@ function joinWords(words: string[]): string {
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
-/** What a series repeats on, in the three fields that say it. */
+/**
+ * What a series repeats on.
+ *
+ * Three shapes, which are the three the web platform holds: every so many weeks
+ * on the days chosen, once every so many months on a date in the month or on a
+ * weekday of it, and a set of dates an organizer picked one by one. A rule that
+ * names no shape is the weekly rule the platform used to have nothing else but.
+ */
 export interface SeriesPattern {
-  intervalWeeks: number | null;
-  daysOfWeek: string | null;
+  frequency?: string | null;
+  intervalWeeks?: number | null;
+  intervalMonths?: number | null;
+  monthDay?: number | null;
+  monthWeek?: number | null;
+  daysOfWeek?: string | null;
   endsOn: string | null;
 }
 
@@ -167,24 +201,43 @@ export interface SeriesPattern {
  * from one of its meetings and has to say the same thing.
  */
 export function describePattern(pattern: SeriesPattern): string {
-  const weeks = pattern.intervalWeeks ?? 1;
-  const every = weeks <= 1 ? 'every week' : `every ${weeks} weeks`;
   const days = (pattern.daysOfWeek ?? '')
     .split(',')
     .map(code => DAY_NAMES[code.trim().toUpperCase()])
     .filter(Boolean) as string[];
 
-  const parts = [`This meeting repeats ${every}`];
-  if (days.length > 0) parts.push(` on ${joinWords(days)}`);
-  if (pattern.endsOn) parts.push(`, until ${campusDate(pattern.endsOn)}`);
-  return `${parts.join('')}.`;
+  if (pattern.frequency === 'dates') {
+    const last = pattern.endsOn ? `, the last on ${campusDate(pattern.endsOn)}` : '';
+    return `This meeting repeats on dates chosen one by one${last}.`;
+  }
+
+  const until = pattern.endsOn ? `, until ${campusDate(pattern.endsOn)}` : '';
+
+  if (pattern.frequency === 'monthly') {
+    const months = pattern.intervalMonths ?? 1;
+    const every = months <= 1 ? 'each month' : `every ${months} months`;
+    // A monthly rule is a date in the month or a weekday of it, and never both.
+    const which = pattern.monthDay != null
+      ? `the ${ordinal(pattern.monthDay)}`
+      : `the ${MONTH_POSITIONS[String(pattern.monthWeek)] ?? ''} ${days[0] ?? ''}`.replace(/\s+/g, ' ').trim();
+    return `This meeting repeats on ${which} of ${every}${until}.`;
+  }
+
+  const weeks = pattern.intervalWeeks ?? 1;
+  const every = weeks <= 1 ? 'every week' : `every ${weeks} weeks`;
+  const on = days.length > 0 ? ` on ${joinWords(days)}` : '';
+  return `This meeting repeats ${every}${on}${until}.`;
 }
 
 /** The pattern of the series an event belongs to, or nothing for an event that stands alone. */
 export function patternOf(event: ViaEvent): string {
   if (!event.seriesId) return '';
   return describePattern({
+    frequency: event.seriesFrequency,
     intervalWeeks: event.seriesIntervalWeeks,
+    intervalMonths: event.seriesIntervalMonths,
+    monthDay: event.seriesMonthDay,
+    monthWeek: event.seriesMonthWeek,
     daysOfWeek: event.seriesDaysOfWeek,
     endsOn: event.seriesEndsOn,
   });

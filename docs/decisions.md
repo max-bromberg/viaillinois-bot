@@ -253,3 +253,18 @@ The switch is now read when the interaction arrives, and a feature a server swit
 refused with one sentence naming the command that puts it back. Setting the bot up and
 removing it are never refused that way, because a switch that could stop either would leave
 a server with no way to switch anything back on.
+
+## 2026-09-09: The bot reads all three shapes of repeat, and the days as VIA writes them
+
+The web platform used to hold one shape of repeat, every so many weeks on the days chosen.
+It now also holds a monthly rule, in both of the forms that phrase means, a date in the
+month or a weekday of it, and a set of dates an organizer picked one by one. A card that
+called all three "every week" would tell a student the wrong thing about when to turn up,
+so the sentence describing a repeat now covers all three, and the series fields the two new
+shapes need are read from the internal service API alongside the ones already read.
+
+The same change fixes a fault of our own. The days of a repeat were being matched against
+the two letter spelling a calendar file uses, and VIA writes them as Sun through Sat, so
+every weekly card and every series announcement had been quietly dropping the days from its
+sentence and saying only how often the meeting repeats. Both spellings are read now, since
+an entry that came from an imported calendar can carry either one.
