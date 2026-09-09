@@ -18,6 +18,9 @@
     "series_id": 4,
     "series_frequency": "weekly",
     "series_interval_weeks": 1,
+    "series_interval_months": null,
+    "series_month_day": null,
+    "series_month_week": null,
     "series_days_of_week": "MO,WE",
     "series_ends_on": "2026-12-09",
     "interest_count": 3
