@@ -190,10 +190,20 @@ export async function switchedOffHere(
  * a button on a message a whole channel reads has to do.
  */
 export function answersOnlyThePerson(
-  handler: { ephemeral?: boolean },
+  handler: { ephemeral?: boolean | ((interaction: never) => boolean) },
   interaction: Pick<Interaction, 'installedInServer'>,
 ): boolean {
-  return handler.ephemeral !== false || !interaction.installedInServer;
+  /*
+   * A handler whose privacy follows what was asked for rather than where it
+   * was asked says so with a function. The events command is the case: a
+   * listing of an organization's internal events was being posted into a
+   * channel the whole server reads, and the web platform shows those only to a
+   * member of that organization.
+   */
+  const wanted = typeof handler.ephemeral === 'function'
+    ? handler.ephemeral(interaction as never)
+    : handler.ephemeral;
+  return wanted !== false || !interaction.installedInServer;
 }
 
 /**

@@ -6,6 +6,20 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+- A security review before the first deploy, and the four things it found. Nothing the bot
+  posts can notify a server any more: almost everything it writes carries text a board
+  member entered on the web platform, so an event titled "@everyone" would have pinged
+  every member of every server that announced it, and the gateway client now refuses to
+  parse a mention out of anything it sends. An organization's internal events stay
+  internal on Discord: asking for them in a listing answers the person who asked rather
+  than the channel, opening one by identifier is refused where the answer would be public
+  and says where to read it instead, and announcing one again into the channel a server
+  bound to announcements is refused outright. The health endpoint the deploy gates on now
+  proves the service token: it asked the web platform for its own health before, which is
+  a readiness check that answers anybody who can reach the port and never reads the
+  Authorization header, so a bot deployed with a wrong or absent token reported itself
+  ready, let the cutover finish, and then failed every command a student ran.
+
 - The bot reads all three shapes of repeat the web platform now holds. A repeat used to be
   every so many weeks on the days chosen and nothing else; it can now also be a monthly
   rule, on a date in the month or on a weekday of it, or a set of dates an organizer picked

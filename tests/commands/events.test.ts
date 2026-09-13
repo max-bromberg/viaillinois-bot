@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   eventsCommand, eventCommand, rsoCommand, eventsComponent, eventComponent, rsoComponent,
-  decodeListing, noLongerInterestedMessage,
+  decodeListing, noLongerInterestedMessage, INTERNAL_IN_CHANNEL_MESSAGE,
 } from '../../src/commands/events.ts';
 import { PAGE_SIZE } from '../../src/render/eventList.ts';
 import type { Interaction, Reply } from '../../src/discord/adapter.ts';
@@ -45,7 +45,8 @@ describe('the events command', () => {
    * answers only the person who asked, whatever this says.
    */
   it('answers the channel it was asked in', () => {
-    expect(eventsCommand.ephemeral).toBe(false);
+    const asked = interaction({ context: 'guild' as const, options: {} });
+    expect(typeof eventsCommand.ephemeral === 'function' && eventsCommand.ephemeral(asked)).toBe(false);
   });
 
   it('asks the web platform for the window the person chose', async () => {
@@ -76,6 +77,27 @@ describe('the events command', () => {
     via.seedEvent({ eventId: 42, title: 'Board sync', isPrivate: true });
     const reply = await eventsCommand.run(ask({ internal: true }), context);
     expect(reply.content).not.toContain('Board sync');
+  });
+
+  /**
+   * An internal event is internal on Discord too.
+   *
+   * The web platform shows an organization's internal events to a member of
+   * that organization and to nobody else. The events command answered the
+   * channel, which in a server that invited the bot is every member of that
+   * server, so a member asking for internal events posted them where the whole
+   * server could read them. The answer is private when internal events were
+   * asked for, and stays a channel answer otherwise, because a listing of
+   * public events is a question the channel has too.
+   */
+  it('answers only the person who asked when the listing includes internal events', () => {
+    const asked = interaction({ context: 'guild' as const, options: { internal: true } });
+    expect(typeof eventsCommand.ephemeral === 'function' && eventsCommand.ephemeral(asked)).toBe(true);
+  });
+
+  it('still answers the channel for a listing of public events', () => {
+    const asked = interaction({ context: 'guild' as const, options: {} });
+    expect(typeof eventsCommand.ephemeral === 'function' && eventsCommand.ephemeral(asked)).toBe(false);
   });
 
   it('shows an internal event to a linked member of that organization who asked for one', async () => {
@@ -318,12 +340,41 @@ describe('the event command', () => {
     expect(choices).toEqual([]);
   });
 
-  it('still opens an internal event by identifier for a member of that organization', async () => {
+  /**
+   * The same rule as the listing, through the other door.
+   *
+   * A member of the organization may open an internal event by identifier, and
+   * the card is theirs to read. The event command answers the channel, though,
+   * so in a server that invited the bot that card went to every member of the
+   * server. Whether the event is internal is not known until the web platform
+   * has answered, and Discord fixes whether a reply is private at the
+   * acknowledgement, before any of that, so the card cannot quietly become a
+   * private one. It is refused where it would be public, and the sentence says
+   * where to read it instead.
+   */
+  it('still opens an internal event by identifier where the answer is private', async () => {
+    const { context, via } = testContext();
+    via.seedEvent({ eventId: 51, title: 'Board sync', isPrivate: true });
+    via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'board' }] });
+    const inDm = { ...ask('51'), context: 'botDm' as const, guildId: null };
+    const reply = await eventCommand.run(inDm, context);
+    expect(reply.content).toContain('Board sync');
+  });
+
+  it('refuses to put an internal event into a channel the whole server reads', async () => {
     const { context, via } = testContext();
     via.seedEvent({ eventId: 51, title: 'Board sync', isPrivate: true });
     via.seedLink(ROSA, { memberships: [{ rsoId: 1, rsoName: 'IEEE', role: 'board' }] });
     const reply = await eventCommand.run(ask('51'), context);
-    expect(reply.content).toContain('Board sync');
+    expect(reply.content).toBe(INTERNAL_IN_CHANNEL_MESSAGE);
+    expect(reply.content).not.toContain('Board sync');
+  });
+
+  it('still puts a public event into the channel', async () => {
+    const { context, via } = testContext();
+    via.seedEvent({ eventId: 52, title: 'Open house', isPrivate: false });
+    const reply = await eventCommand.run(ask('52'), context);
+    expect(reply.content).toContain('Open house');
   });
 });
 

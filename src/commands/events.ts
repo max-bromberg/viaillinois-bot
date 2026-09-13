@@ -225,10 +225,18 @@ async function completeRsos(interaction: Interaction, context: CommandContext): 
 export const eventsCommand: CommandHandler = {
   featureId: listFeature.id,
   name: listFeature.command!.name,
-  // A reading command answers the channel in a server that invited the bot,
-  // because the question it answers is the channel's too. In a server that
-  // did not invite it, the dispatcher answers only the person who asked.
-  ephemeral: false,
+  /*
+   * A reading command answers the channel in a server that invited the bot,
+   * because the question it answers is the channel's too. In a server that did
+   * not invite it, the dispatcher answers only the person who asked.
+   *
+   * A listing that includes internal events is the exception. The web platform
+   * shows an organization's internal events to a member of that organization
+   * and to nobody else, and answering the channel handed them to every member
+   * of the server instead, so that listing is answered to the person who asked
+   * for it wherever it was asked.
+   */
+  ephemeral: (interaction: Interaction) => interaction.options?.internal === true,
 
   async run(interaction: Interaction, context: CommandContext): Promise<Reply> {
     const rsoOption = interaction.options.rso;
@@ -291,6 +299,20 @@ export const eventsComponent: ComponentHandler = {
   },
 };
 
+/**
+ * Whether an answer here is read by the channel rather than by the person who
+ * asked. A server that invited the bot gets a channel answer, which is the
+ * whole point of a reading command. Anywhere else, the dispatcher answers only
+ * the person, and a direct message has nobody else in it to begin with.
+ */
+function answersTheChannel(interaction: Interaction): boolean {
+  return interaction.installedInServer && interaction.context === 'guild';
+}
+
+export const INTERNAL_IN_CHANNEL_MESSAGE =
+  'That event is internal to its organization, so it is not put into a channel the whole server reads. '
+  + 'Run the events command with the internal option to read it, and the answer comes to you alone.';
+
 export const eventCommand: CommandHandler = {
   featureId: detailFeature.id,
   name: detailFeature.command!.name,
@@ -310,6 +332,22 @@ export const eventCommand: CommandHandler = {
       return answerFor(err);
     }
     if (!event) return { content: NO_SUCH_EVENT_MESSAGE };
+
+    /*
+     * The web platform answered with this event, so the person asking is
+     * entitled to read it. Where this command answers, though, is the channel,
+     * and in a server that invited the bot that is every member of the server.
+     *
+     * Whether the event is internal is not known until the web platform has
+     * answered, and Discord fixes whether a reply is private at the
+     * acknowledgement, which happens before any of this runs, so the card
+     * cannot quietly become a private one. It is refused where it would be
+     * public instead, and the sentence says where to read it.
+     */
+    if (event.isPrivate && answersTheChannel(interaction)) {
+      return { content: INTERNAL_IN_CHANNEL_MESSAGE };
+    }
+
     // The card carries the way into the board actions, which opens it again
     // for whoever presses it with the actions the web platform allows them.
     return renderEventCard(event, { websiteUrl: context.websiteUrl, manageable: true });

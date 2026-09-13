@@ -547,14 +547,27 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
     },
 
     /**
-     * The web platform serves one port, and its health endpoint is the one
-     * path on it that is safe to poll continuously. The bot's own health
-     * endpoint reports the answer, so a web platform that is down shows as a
-     * bot that is not ready rather than as commands that fail one by one.
+     * Whether the bot can reach the web platform and be served by it.
+     *
+     * The bot's own health endpoint reports this, so a web platform that is
+     * down shows as a bot that is not ready rather than as commands that fail
+     * one by one.
+     *
+     * It asks the internal service API rather than the web platform's own
+     * health endpoint. That endpoint is a readiness check: it answers anybody
+     * who can reach the port and never looks at the Authorization header, so a
+     * bot deployed with a wrong, expired or absent service token reported the
+     * web platform as reachable, went green, let the cutover finish, and then
+     * failed every command a student ran. The listing of organizations is the
+     * cheapest thing behind the token, it is what every command needs to work,
+     * and a refusal here is the case this exists to catch.
+     *
+     * Answers are held for a moment by the caller, so a burst of hits on the
+     * health port costs one call rather than one each.
      */
     async health(): Promise<boolean> {
       try {
-        const response = await fetchImpl(address('/health'), {
+        const response = await fetchImpl(address(`${INTERNAL_PREFIX}/rsos`), {
           method: 'GET',
           headers: {
             Authorization: `Bearer ${serviceToken}`,
@@ -563,6 +576,16 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
           },
           signal: AbortSignal.timeout(timeoutMs),
         });
+        // The one failure an operator cannot diagnose from the outside, so it
+        // is named in the log rather than left as a bot that is simply not
+        // ready. A 404 is the same answer the door gives a request with no
+        // token at all, which is what an unset one looks like from here.
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          console.error(
+            `the web platform refused the bot's service token (${response.status}): `
+            + 'check BOT_SERVICE_TOKEN is the same value in both containers',
+          );
+        }
         return response.ok;
       } catch {
         return false;
