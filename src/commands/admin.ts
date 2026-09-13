@@ -366,6 +366,16 @@ async function repost(
   if (!interaction.guildId) return { content: GUILD_ONLY_MESSAGE };
   if (!context.postMessage) return { content: NOTHING_TO_POST_WITH_MESSAGE };
 
+  /*
+   * An internal event is not announced. The web platform shows one to a member
+   * of the organization and to nobody else, and the channel a server binds to
+   * announcements is read by the whole server. The jobs that announce events
+   * never ask the web platform for internal ones, so this button was the one
+   * path that could put one in front of everybody, and an editor pressing it
+   * had no way to tell from the card that they were doing it.
+   */
+  if (event.isPrivate) return { content: INTERNAL_NOT_ANNOUNCED_MESSAGE };
+
   const following = await context.guilds.listGuildsFollowing(event.rsoId);
   if (!following.some(installation => installation.guildId === interaction.guildId)) {
     return { content: NOT_FOLLOWED_HERE_MESSAGE };
@@ -381,6 +391,10 @@ async function repost(
 
   return { content: `**${event.title}** has been announced again in <#${channelId}>.` };
 }
+
+export const INTERNAL_NOT_ANNOUNCED_MESSAGE =
+  'That event is internal to the organization, so it is not announced in a channel the whole server reads. '
+  + 'Make it public first if you want it announced here.';
 
 export const NOTHING_TO_POST_WITH_MESSAGE =
   'The bot cannot post in this server right now, so the announcement has not been posted again. Please try again in a few minutes.';

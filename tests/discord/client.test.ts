@@ -54,6 +54,23 @@ describe('the gateway client', () => {
     expect(intents.reduce((field, intent) => field | intent, 0)).toBe(intentsBitfield());
   });
 
+  /**
+   * Nothing the bot posts may notify a server.
+   *
+   * Almost everything the bot writes carries text somebody else wrote: an
+   * event title, a description, an organization's name, all of them entered on
+   * the web platform by a board member. A title reading "@everyone" would have
+   * pinged every member of every server that announced that event, from a
+   * message the bot sent, and the same goes for the reminders, the digests and
+   * the announcement cards. The gateway client refuses to parse a mention out
+   * of any of it, which covers every path that posts rather than each one
+   * remembering.
+   */
+  it('lets nothing it posts notify a server', () => {
+    const { built } = gateway();
+    expect(built[0]!.allowedMentions).toEqual({ parse: [] });
+  });
+
   it('is not connected until the gateway says it is ready', async () => {
     const { bot, client } = gateway();
     expect(bot.isConnected()).toBe(false);

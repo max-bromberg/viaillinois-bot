@@ -4,6 +4,7 @@ import {
   postponeCommand, cancelCommand, describeCommand, visibilityCommand, repostCommand,
   noteCommand, adminComponent, adminFormComponent, ADMIN_BUTTON, FORM_PREFIX,
   NOT_LINKED_TO_ACT_MESSAGE, NOT_FOLLOWED_HERE_MESSAGE, NO_ANNOUNCEMENTS_CHANNEL_MESSAGE,
+  INTERNAL_NOT_ANNOUNCED_MESSAGE,
   notAnEditorMessage,
 } from '../../src/commands/admin.ts';
 import { renderEventCard } from '../../src/render/eventCard.ts';
@@ -380,6 +381,27 @@ describe('posting an announcement again', () => {
 
     await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
     expect(posted).toHaveLength(1);
+  });
+
+  /**
+   * An internal event is not announced.
+   *
+   * The web platform shows an organization's internal events to a member of
+   * that organization and to nobody else, and the announcement channel a
+   * server binds is read by the whole server. The jobs that announce events
+   * never ask for internal ones, so this button was the one path that could put
+   * one in front of everybody, and an editor pressing it had no way to tell
+   * from the card that they were doing it.
+   */
+  it('refuses to announce an internal event', async () => {
+    const { context, guilds, via, posted } = withEditor();
+    via.seedEvent({ eventId: EVENT, isPrivate: true });
+    await following(guilds);
+
+    const reply = await answer(press(ADMIN_BUTTON.repost(EVENT)), context);
+
+    expect(reply.content).toBe(INTERNAL_NOT_ANNOUNCED_MESSAGE);
+    expect(posted).toEqual([]);
   });
 
   it('writes down the new announcement, so that a later change edits this one', async () => {

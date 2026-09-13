@@ -60,7 +60,22 @@ export function createGateway(options: GatewayOptions): BotGateway {
     createClient = (clientOptions: ClientOptions) => new Client(clientOptions),
   } = options;
 
-  const client = createClient({ intents: [...GATEWAY_INTENTS] });
+  /*
+   * Nothing the bot posts may notify a server.
+   *
+   * Almost everything it writes carries text somebody else wrote: an event
+   * title, a description, an organization's name, each of them entered on the
+   * web platform by a board member. An event titled "@everyone" would have
+   * pinged every member of every server that announced it, from a message the
+   * bot sent and with nothing in the bot's own words to explain it. Refusing to
+   * parse a mention out of anything covers every path that posts, rather than
+   * each one having to remember, and a role named in the roles panel still
+   * reads as that role's name. It simply does not ring.
+   */
+  const client = createClient({
+    intents: [...GATEWAY_INTENTS],
+    allowedMentions: { parse: [] },
+  });
 
   client.once(Events.ClientReady, (ready: { user?: { tag?: string } }) => {
     const tag = ready?.user?.tag ?? 'the bot user';

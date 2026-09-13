@@ -79,7 +79,7 @@ describe('the web platform client over HTTP', () => {
       json(200, fixture('links.session.json')),
       json(200, fixture('links.link.json')),
       json(204, ''),
-      json(200, fixture('health.json')),
+      json(200, '[]'),
     ]);
     await via.openLinkSession('204255221017214977');
     await via.getLink('204255221017214977');
@@ -243,10 +243,32 @@ describe('the web platform client over HTTP', () => {
     expect((failure as ViaError).message).toBe('The VIA web platform did not answer.');
   });
 
-  it('reports the web platform as healthy only when its health endpoint says so', async () => {
-    const { via, calls } = client([json(200, fixture('health.json')), json(503, '{"status":"unavailable"}')]);
+  /**
+   * The probe proves the service token, not merely that something answered.
+   *
+   * It used to ask for the web platform's own health endpoint, which is a
+   * readiness check that answers anybody who can reach the port and never looks
+   * at the Authorization header. A bot deployed with a wrong, expired or absent
+   * service token therefore reported the web platform as reachable, its own
+   * health endpoint went green, the cutover completed, and every command a
+   * student ran failed afterwards. It asks the internal service API instead,
+   * which is the thing the bot actually needs to be able to reach, and which
+   * refuses a request that does not carry the token.
+   */
+  it('proves the service token rather than only that the web platform answered', async () => {
+    const { via, calls } = client([json(200, '[]')]);
     expect(await via.health()).toBe(true);
-    expect(calls[0]!.url).toBe('http://via:3001/health');
+    expect(calls[0]!.url).toBe('http://via:3001/internal/v1/rsos');
+    expect(calls[0]!.headers.authorization).toBe('Bearer service-token');
+  });
+
+  it('reports the web platform as unhealthy when it will not take the token', async () => {
+    const { via } = client([json(401, '{"error":"unauthorized"}')]);
+    expect(await via.health()).toBe(false);
+  });
+
+  it('reports the web platform as unhealthy when it is not ready', async () => {
+    const { via } = client([json(503, '{"status":"unavailable"}')]);
     expect(await via.health()).toBe(false);
   });
 

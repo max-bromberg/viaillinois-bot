@@ -87,8 +87,15 @@ export interface CommandHandler {
   featureId: string;
   /** The name as the adapter reports it, which is what the dispatcher keys on. */
   name: string;
-  /** Whether only the person who asked sees the answer. */
-  ephemeral: boolean;
+  /**
+   * Whether only the person who asked sees the answer.
+   *
+   * A function when the answer's privacy follows what was asked for rather
+   * than where it was asked. The events command is the case: a listing of
+   * public events is a question the channel has too, and a listing that
+   * includes an organization's internal events is not.
+   */
+  ephemeral: boolean | ((interaction: Interaction) => boolean);
   /**
    * Whether this command can answer with a form rather than a message.
    * Discord takes a form only as the first thing said about an interaction,
@@ -121,7 +128,7 @@ export interface ComponentHandler {
   /** Whether the answer edits the message the component sits on. */
   updateInPlace?: boolean;
   /** Whether only the person who pressed it sees the answer, when it is a new message. */
-  ephemeral?: boolean;
+  ephemeral?: boolean | ((interaction: Interaction) => boolean);
   /**
    * Whether this handler can answer with a form. A handler that may is run
    * before the interaction is acknowledged, because Discord takes a form only

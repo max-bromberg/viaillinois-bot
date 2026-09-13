@@ -6,7 +6,7 @@ import {
   answersOnlyThePerson, createDispatcher, handlers, FEATURE_OFF_MESSAGE, UNKNOWN_COMMAND_MESSAGE,
 } from '../../src/commands/index.ts';
 import { buildCommands } from '../../src/discord/registerCommands.ts';
-import { FAILURE_MESSAGE } from '../../src/discord/adapter.ts';
+import { FAILURE_MESSAGE, type OptionValue } from '../../src/discord/adapter.ts';
 import { autocompleteSubject, type RateDecision, type RateTier } from '../../src/ratelimit/windows.ts';
 import { interaction, testContext } from './support.ts';
 
@@ -432,6 +432,25 @@ describe('answering in a server that has not installed the bot', () => {
     const dm = { ...interaction({ context: 'botDm' as const, guildId: null }), installedInServer: true };
     expect(answersOnlyThePerson(handler, dm)).toBe(false);
   });
+
+  /**
+   * Some answers are private because of what was asked for rather than because
+   * of where they were asked. A listing of an organization's internal events is
+   * the case that matters: the web platform shows those only to a member of
+   * that organization, and the bot was posting them into a channel the whole
+   * server reads. Whether an answer is private has to be settled before the
+   * acknowledgement, because Discord fixes it there, so a handler that needs to
+   * decide per invocation says so with a function rather than a flag.
+   */
+  it('lets a handler decide privacy from what was asked', () => {
+    const decides = { ephemeral: (asked: { options: Record<string, unknown> }) => asked.options.internal === true };
+    const asking = (internal: boolean) => ({
+      ...interaction({ context: 'guild' as const, options: { internal } }),
+      installedInServer: true,
+    });
+    expect(answersOnlyThePerson(decides, asking(true))).toBe(true);
+    expect(answersOnlyThePerson(decides, asking(false))).toBe(false);
+  });
 });
 
 /**
@@ -447,17 +466,30 @@ describe('answering in a server that has not installed the bot', () => {
 describe('the commands a channel reads', () => {
   const READING = ['events', 'event', 'rso', 'midterms', 'rooms', 'course', 'building'];
 
+  /**
+   * A handler whose privacy follows what was asked for says so with a function,
+   * so what each one decides is read by asking it rather than by reading the
+   * flag. Asked with nothing in particular, a reading command answers the
+   * channel.
+   */
+  const decidesOn = (
+    handler: { ephemeral?: boolean | ((asked: never) => boolean) },
+    options: Record<string, OptionValue> = {},
+  ) => (typeof handler.ephemeral === 'function'
+    ? handler.ephemeral({ ...interaction({ context: 'guild' as const, options }) } as never)
+    : handler.ephemeral);
+
   it('answers the reading commands to the channel, in a server that installed the bot', () => {
     for (const name of READING) {
       const handler = handlers.find(one => one.name === name)!;
-      expect(handler.ephemeral, name).toBe(false);
+      expect(decidesOn(handler), name).toBe(false);
     }
   });
 
   it('answers every other command only to the person who ran it', () => {
     for (const handler of handlers) {
       if (READING.includes(handler.name)) continue;
-      expect(handler.ephemeral, handler.name).toBe(true);
+      expect(decidesOn(handler), handler.name).toBe(true);
     }
   });
 
