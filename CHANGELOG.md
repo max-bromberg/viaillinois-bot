@@ -6,6 +6,10 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+## 0.1.0 (2026-09-13)
+
+- 
+
 - A security review before the first deploy, and the four things it found. Nothing the bot
   posts can notify a server any more: almost everything it writes carries text a board
   member entered on the web platform, so an event titled "@everyone" would have pinged
