@@ -109,3 +109,8 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Named rather than left to discovery, so that the allowlist in it is
+          # certainly the one this job runs with. The file keeps the whole
+          # default rule set and adds one scoped allowlist; the reason is
+          # written out at the top of it.
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml

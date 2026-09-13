@@ -1,0 +1,37 @@
+# Secret scanning, as the gate's security job runs it.
+#
+# The default rule set is kept in full. The one addition is an allowlist for
+# Discord snowflake identifiers inside test files.
+#
+# A Discord snowflake is an eighteen digit number, and the default
+# discord-client-id rule matches any of them. The tests and the recorded
+# fixtures are full of invented ones, because every link, every acting request
+# and every outbox entry is keyed by the Discord account it belongs to, and a
+# test has to name one. Twenty nine of them were reported on one pull request.
+#
+# A Discord application's client identifier is public by design: it is in the
+# address every authorization flow sends a person to. The value that has to stay
+# secret is the client secret, which a different rule catches, and which lives
+# only in the deployment environment.
+#
+# The allowlist is scoped to the rule and to the test paths rather than written
+# as a path allowlist, so every other rule still runs over those same files. A
+# real credential pasted into a test is still a failure.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "discord-client-id"
+description = "Discord client ID"
+regex = '''(?i)\b(discord[_.-]?(?:client)?[_.-]?id)\b.{0,20}\b(\d{17,19})\b'''
+keywords = ["discord"]
+
+  [rules.allowlist]
+  description = "Invented snowflakes in tests and recorded fixtures"
+  regexTarget = "line"
+  paths = [
+    '''(^|/)tests?/''',
+    '''(^|/)__tests__/''',
+    '''\.test\.(js|ts|mjs)$''',
+    '''(^|/)fixtures/''',
+  ]
