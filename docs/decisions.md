@@ -268,3 +268,36 @@ the two letter spelling a calendar file uses, and VIA writes them as Sun through
 every weekly card and every series announcement had been quietly dropping the days from its
 sentence and saying only how often the meeting repeats. Both spellings are read now, since
 an entry that came from an imported calendar can carry either one.
+
+## 2026-09-19: A free room is picked from menus, because Discord has no date box
+
+A slash command option is a string, a number or a boolean. There is no date picker to put
+on one, and asking a student to type 2026-09-19 to find out whether a room is free after
+their next lecture is asking them to learn a format before they can ask a question. So the
+day option completes as it is typed, to right now, to today, to tomorrow and to each of the
+next thirteen days, each written the way somebody says it out loud, and every answer carries
+three menus under it: the day, the hour it starts at, and how long it runs. Pressing one
+rewrites the message in place with the new window, so moving an hour later costs one press
+rather than a second command and a second answer under the first.
+
+Right now is a value of the day option rather than a command of its own, because it is what
+the command already meant when it was run with nothing but a building, and a second command
+would have been a second thing to find. The length menu is what makes it useful for the
+question it is usually asked for, which is somewhere to meet for half an hour.
+
+## 2026-09-19: The capacity of a room is shown nowhere
+
+Max_Capacity in the web platform's locations table is not a figure anybody measured. It
+reads the same for very nearly every room on campus, so a board comparing two rooms by it
+learned nothing, and a board that believed it would plan around a number VIA cannot stand
+behind. The column stays, because the timetable import writes it, and no answer the bot
+gives and no screen on the website draws from it.
+
+## 2026-09-19: The free rooms of a building are grouped by floor
+
+An empty hour in a building the size of the Electrical & Computer Engineering Building
+leaves dozens of rooms free, and a column of dozens of lines is not an answer anybody reads.
+The rooms of a floor go on one line instead, so the answer is as tall as the building rather
+than as tall as the room list, and somebody who wants the second floor reads one line. The
+rooms with a projector are named once at the end, because a note beside every room number
+would drown the numbers themselves.

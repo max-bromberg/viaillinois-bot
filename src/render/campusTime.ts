@@ -29,6 +29,12 @@ const DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric',
 });
 
+/** A day written out in full, which is how a menu and a completion name one. */
+const DAY_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: CAMPUS_TIME_ZONE,
+  weekday: 'long', month: 'long', day: 'numeric',
+});
+
 const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
   timeZone: CAMPUS_TIME_ZONE,
   hour: 'numeric', minute: '2-digit',
@@ -96,6 +102,20 @@ export function toInstant(value: string | Date | null | undefined): Date | null 
 export function campusDate(value: string | Date | null | undefined): string {
   const instant = toInstant(value);
   return instant ? tidy(DATE_FORMAT.format(instant)) : '';
+}
+
+/**
+ * A campus day written out in full, such as Friday, September 19.
+ *
+ * The date and the time of day are written short everywhere the bot lists
+ * something, because a listing is read down a column. A day offered in a menu
+ * or a completion is read on its own and chosen from a handful, so it is
+ * written the way somebody says it, and nobody picking one has to know that a
+ * date is written YYYY-MM-DD.
+ */
+export function campusDayLong(value: string | Date | null | undefined): string {
+  const instant = toInstant(value);
+  return instant ? tidy(DAY_FORMAT.format(instant)) : '';
 }
 
 /** The time of day on campus, as the website writes it. */
