@@ -209,6 +209,25 @@ export function campusDatePlus(days: number, now: Date = new Date()): string {
   return isoDay(addDays(fieldsOf(now), days));
 }
 
+/**
+ * The campus date a number of days after a campus date, as YYYY-MM-DD.
+ *
+ * A window that starts at a named hour and runs for a named length can finish
+ * on the following day, and the day it finishes on is counted here rather than
+ * by adding milliseconds, for the same reason campusDatePlus counts that way:
+ * a day is not always twenty four hours long on a clock that moves twice a
+ * year. A date this cannot read is handed back as it came, so that the reading
+ * router answers it rather than the bot inventing a day.
+ */
+export function campusDayPlus(day: string, days: number): string {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!parts) return day;
+  return isoDay(addDays({
+    year: Number(parts[1]), month: Number(parts[2]), day: Number(parts[3]),
+    hour: 0, minute: 0, second: 0,
+  }, days));
+}
+
 /** Which day of the week a campus date falls on, zero for Sunday, as the digest day counts. */
 function dayOfWeek(fields: CampusFields): number {
   return new Date(Date.UTC(fields.year, fields.month - 1, fields.day)).getUTCDay();

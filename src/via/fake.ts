@@ -184,6 +184,10 @@ export interface FakeViaClient extends ViaClient {
   readonly postponements: RecordedPostponement[];
   /** Every question the scheduler was asked, in order. */
   readonly scheduleRequests: ScheduleRequest[];
+  /** Every free room search the fake was asked, in order, as the bot sent it. */
+  readonly freeRoomQueries: FreeRoomQuery[];
+  /** The last free room search, which is what a test about a window reads. */
+  lastFreeRoomQuery(): FreeRoomQuery;
   /** Every repeat the fake was asked to create, in order. */
   readonly seriesRequests: SeriesRequest[];
   /** Replace what the scheduler answers, for a test about an answer that has changed. */
@@ -210,6 +214,7 @@ export function createFakeViaClient(): FakeViaClient {
   const links = new Map<string, SeededLink>();
   const sessions: OpenedSession[] = [];
   const calls: string[] = [];
+  const freeRoomQueries: FreeRoomQuery[] = [];
   const rsos = new Map<number, Rso>(RECORDED_RSOS.map(rso => [rso.rsoId, { ...rso }]));
   const events = new Map<number, ViaEvent>([[RECORDED_EVENT.eventId, { ...RECORDED_EVENT }]]);
   const outbox: OutboxEntry[] = [];
@@ -388,6 +393,12 @@ export function createFakeViaClient(): FakeViaClient {
   return {
     sessions,
     calls,
+    freeRoomQueries,
+    lastFreeRoomQuery() {
+      const last = freeRoomQueries.at(-1);
+      if (!last) throw new Error('no free room search has been made');
+      return last;
+    },
     interests,
     feedback: given,
 
@@ -533,6 +544,7 @@ export function createFakeViaClient(): FakeViaClient {
       calendarCounter = 0;
       sessions.length = 0;
       calls.length = 0;
+      freeRoomQueries.length = 0;
       outbox.length = 0;
       interests.length = 0;
       given.length = 0;
@@ -815,6 +827,7 @@ export function createFakeViaClient(): FakeViaClient {
     async freeRooms(query: FreeRoomQuery): Promise<FreeRooms> {
       throwIfInstructed();
       calls.push('freeRooms');
+      freeRoomQueries.push(query);
       if (!query.building.trim()) {
         throw new ViaError('A building is required, by code or by name.', 400, 'invalid');
       }

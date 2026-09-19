@@ -1,6 +1,8 @@
 import { HOUR_CHOICES, featureById } from '../features/registry.ts';
 import { renderBuilding, renderCourseSections, renderFreeRooms } from '../render/campus.ts';
-import { campusDatePlus, campusDayLong, campusStamp, campusToday } from '../render/campusTime.ts';
+import {
+  campusDatePlus, campusDayLong, campusDayPlus, campusStamp, campusToday,
+} from '../render/campusTime.ts';
 import { ViaError } from '../via/client.ts';
 import { chosenCourse, completeCourses } from './midterms.ts';
 import { answerFor } from './shared.ts';
@@ -164,11 +166,24 @@ export function roomWindow(search: RoomSearch, now: Date): { from: string; to: s
 
   const hour = search.from ?? 0;
   const from = atHour(search.day, hour);
+  // The whole of a day is a question about that day, so it ends when the day
+  // does. A length is a question about that much time, so it runs on.
   if (search.minutes === null) return { from, to: endOfDay(search.day) };
 
+  /*
+   * A window that runs past midnight finishes on the following day rather than
+   * at the last reading of this one.
+   *
+   * It used to stop there, so asking for three hours from eleven at night was
+   * answered about fifty nine minutes, with nothing saying why, while the same
+   * three hours asked for as right now ran on properly. The web platform reads
+   * a window of up to seven days, so there was never anything to clamp against
+   * and the two ways of asking now agree.
+   */
   const ends = hour * 60 + search.minutes;
-  if (ends >= 24 * 60) return { from, to: endOfDay(search.day) };
-  return { from, to: atHour(search.day, Math.floor(ends / 60), ends % 60) };
+  const day = campusDayPlus(search.day, Math.floor(ends / (24 * 60)));
+  const within = ends % (24 * 60);
+  return { from, to: atHour(day, Math.floor(within / 60), within % 60) };
 }
 
 /**
@@ -235,6 +250,13 @@ export function encodeSearch(field: string, search: RoomSearch): string {
   ].join(':');
 }
 
+/**
+ * The parts of a window a menu can move, which is what a menu identifier is
+ * allowed to name. An identifier naming anything else is one this build did
+ * not write, so it is refused rather than half read.
+ */
+const MENU_FIELDS = new Set(['day', 'hour', 'length']);
+
 export function decodeSearch(customId: string): { field: string; search: RoomSearch } | null {
   const parts = customId.split(':');
   // The prefix carries a colon of its own, so the four fields of the search
@@ -242,11 +264,19 @@ export function decodeSearch(customId: string): { field: string; search: RoomSea
   if (parts.length < 6 || `${parts[0]}:` !== ROOMS_PREFIX) return null;
   const [, field, day, from, minutes] = parts;
   const building = parts.slice(5).join(':');
-  if (!field || !day || !building) return null;
+  if (!field || !day || !building || !MENU_FIELDS.has(field)) return null;
 
-  const number = (value: string | undefined) => (
-    value === REST_OF_DAY || value === undefined ? null : Number(value)
-  );
+  /*
+   * A part left empty is not a zero. Number('') reads as the top of the
+   * morning, so an identifier missing its hour would quietly answer about
+   * midnight rather than about whatever was on the screen. Only the rest of
+   * the day is written as something other than a number.
+   */
+  const number = (value: string | undefined) => {
+    if (value === REST_OF_DAY) return null;
+    if (!value) return NaN;
+    return Number(value);
+  };
   const startsAt = number(from);
   const runsFor = number(minutes);
   if (Number.isNaN(startsAt) || Number.isNaN(runsFor)) return null;

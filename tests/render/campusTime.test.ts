@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  campusDate, campusDatePlus, campusDateTime, campusStamp, campusTimeOfDay, campusToday,
-  campusWallClock, relativeTimestamp, windowRange,
+  campusDate, campusDatePlus, campusDateTime, campusDayPlus, campusStamp, campusTimeOfDay,
+  campusToday, campusWallClock, relativeTimestamp, windowRange,
 } from '../../src/render/campusTime.ts';
 
 /**
@@ -156,5 +156,49 @@ describe('the campus wall clock a form holds', () => {
   it('answers with nothing for a reading it cannot make sense of', () => {
     expect(campusWallClock('tomorrow evening')).toBe('');
     expect(campusWallClock(null)).toBe('');
+  });
+});
+
+/**
+ * The campus date a number of days after a campus date.
+ *
+ * A window that starts at a named hour and runs for a named length can finish
+ * on the day after, and the day it finishes on is counted in calendar fields
+ * rather than by adding milliseconds, because a day is not always twenty four
+ * hours long on a clock that moves twice a year.
+ */
+describe('the day after a campus date', () => {
+  it('is the next day', () => {
+    expect(campusDayPlus('2026-09-10', 1)).toBe('2026-09-11');
+  });
+
+  it('is the same day when nothing is added', () => {
+    expect(campusDayPlus('2026-09-10', 0)).toBe('2026-09-10');
+  });
+
+  it('crosses the end of a month', () => {
+    expect(campusDayPlus('2026-09-30', 1)).toBe('2026-10-01');
+  });
+
+  it('crosses the end of a year', () => {
+    expect(campusDayPlus('2026-12-31', 1)).toBe('2027-01-01');
+  });
+
+  /**
+   * The two nights the clock moves. Counted in hours these would land an hour
+   * either side of the day they should, which is the whole reason the counting
+   * is done in calendar fields.
+   */
+  it('counts the night the clocks go forward as one day', () => {
+    expect(campusDayPlus('2026-03-07', 1)).toBe('2026-03-08');
+  });
+
+  it('counts the night the clocks go back as one day', () => {
+    expect(campusDayPlus('2026-10-31', 1)).toBe('2026-11-01');
+  });
+
+  /** A date the router would refuse is handed back rather than invented over. */
+  it('hands back a date it cannot read', () => {
+    expect(campusDayPlus('next tuesday', 1)).toBe('next tuesday');
   });
 });

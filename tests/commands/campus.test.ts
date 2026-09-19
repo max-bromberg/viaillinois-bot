@@ -344,3 +344,122 @@ describe('looking a building up', () => {
     expect(reply.content).toBe(NOT_A_BUILDING_MESSAGE);
   });
 });
+
+/**
+ * A window that runs past midnight.
+ *
+ * The bot builds a window two ways. A window that starts at this moment runs
+ * on from it, and one that starts at a named hour of a named day used to stop
+ * at the last reading of that day whatever length was asked for. So standing
+ * in a building at eleven at night and asking for three hours answered about
+ * three hours, and choosing tonight and eleven and three hours from the menus
+ * answered about fifty nine minutes, with nothing saying why. The web platform
+ * reads a window of up to seven days, so there was never anything to clamp
+ * against, and the two ways of asking the same question now agree.
+ *
+ * The whole of a day is a different request and still ends when the day does.
+ */
+describe('a window that runs past midnight', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  /** The window the web platform was asked about, as the bot sent it. */
+  function asked(): { from: string; to: string } {
+    const query = ctx.via.lastFreeRoomQuery();
+    return { from: query.from, to: query.to };
+  }
+
+  it('runs into the next day rather than stopping at the last reading of this one', async () => {
+    await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10', from: '23', to: '25' },
+      }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 23:00:00', to: '2026-09-11 01:00:00' });
+  });
+
+  it('asks the same thing whichever way the window was given', async () => {
+    const first = await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10', from: '23' },
+      }),
+      ctx.context,
+    );
+    // The length menu is the third, and three hours from eleven at night is
+    // the case that used to be cut down to fifty nine minutes.
+    const menu = first.components![2]!.components[0] as { customId: string };
+    await roomsComponent.run(
+      interaction({ userId: ADA, kind: 'select', customId: menu.customId, values: ['180'] }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 23:00:00', to: '2026-09-11 02:00:00' });
+  });
+
+  /** The whole of a day is a request about that day, so it still ends with it. */
+  it('still ends the whole of a day when that day ends', async () => {
+    await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10' },
+      }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 00:00:00', to: '2026-09-10 23:59:59' });
+  });
+});
+
+/**
+ * What a menu identifier is allowed to say.
+ *
+ * Every menu under a room answer carries the window written into its
+ * identifier, and Discord hands that identifier back when somebody presses it.
+ * The bot wrote those identifiers, so this is not a stranger's input, but a
+ * build that changes their shape is one whose old messages are still on the
+ * screen in channels. An identifier that does not say something the bot could
+ * have written is refused rather than half read.
+ */
+describe('a menu identifier the bot did not write', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  const press = (customId: string, value = '2026-09-10') => roomsComponent.run(
+    interaction({ userId: ADA, kind: 'select', customId, values: [value] }),
+    ctx.context,
+  );
+
+  it('refuses one naming a part of the window that does not exist', async () => {
+    const reply = await press('rooms:elevenses:2026-09-10:9:60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  it('refuses one whose hour is not a number', async () => {
+    const reply = await press('rooms:day:2026-09-10:half nine:60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  /**
+   * An empty part is not a zero. Reading one as the top of the morning would
+   * answer a question nobody asked, so it is refused like any other identifier
+   * the bot would not have written.
+   */
+  it('refuses one whose hour was left empty rather than reading it as midnight', async () => {
+    const reply = await press('rooms:day:2026-09-10::60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  it('still answers one it did write', async () => {
+    const reply = await press('rooms:day:2026-09-10:9:60:ECEB');
+    expect(reply.content).not.toBe(ROOMS_GONE_MESSAGE);
+  });
+});
