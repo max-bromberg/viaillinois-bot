@@ -10,7 +10,7 @@ import {
   type EventChanges, type EventFeedback, type EventPage, type EventQuery, type FreeRooms,
   type FreeRoomQuery, type InterestAnswer, type InterestSignal, type LinkSession,
   type LinkedAccount, type Midterm, type MidtermQuery, type OutboxPage, type OutboxQuery,
-  type PersonalCalendar, type Postponement, type ReportedGuildBinding,
+  type PersonalCalendar, type Postponement, type ReportedGuildBinding, type ReportedOptIns,
   type Rso, type RsoMember, type RsoWithEvents, type ScheduleRecommendations, type ScheduleRequest,
   type SeriesCreated, type SeriesRequest, type ViaEvent,
 } from './client.ts';
@@ -352,6 +352,14 @@ export function createViaHttpClient(options: ViaHttpOptions): ViaHttpClient {
 
     async forgetGuildBinding(guildId: string): Promise<void> {
       await request<unknown>({ method: 'DELETE', path: `/guilds/${guildId}/binding` });
+    },
+
+    async reportOptIns(optIns: ReportedOptIns): Promise<void> {
+      await request<unknown>({
+        method: 'PUT',
+        path: `/optins/${optIns.discordUserId}`,
+        body: { following: optIns.following, reminders: optIns.reminders },
+      });
     },
 
     /**

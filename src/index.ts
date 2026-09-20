@@ -29,6 +29,7 @@ import { createMidtermHandlers } from './announce/midterms.ts';
 import { createMembershipHandlers } from './announce/membership.ts';
 import { createLinkHandlers } from './identity/links.ts';
 import { createBindingReporter, createGuildBindingHandlers } from './guilds/binding.ts';
+import { createOptInHandlers } from './feed/optIns.ts';
 import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
@@ -214,6 +215,13 @@ const consumer = createOutboxConsumer({
      * the binding is cleared where it actually lives.
      */
     ...createGuildBindingHandlers({ guilds }),
+    /**
+     * Somebody followed an organization or asked for a reminder on the
+     * website. The website cannot reach the tables those live in, so the
+     * choice arrives here and is applied where it counts, and what the bot
+     * holds afterwards is reported back so the two agree.
+     */
+    ...createOptInHandlers({ feed, via }),
   },
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.

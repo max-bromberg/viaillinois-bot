@@ -523,6 +523,13 @@ export interface ReportedGuildBinding {
   boundBy: string | null;
 }
 
+/** Everything one person has asked to be told about, as the bot holds it. */
+export interface ReportedOptIns {
+  discordUserId: string;
+  following: number[];
+  reminders: number[];
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -562,6 +569,13 @@ export interface ViaClient {
    * because it was rebound, taken out of setup, or the bot has left it.
    */
   forgetGuildBinding(guildId: string): Promise<void>;
+  /**
+   * Tell the web platform everything this person has asked to be told about,
+   * so that the website shows the same answer whichever side the choice was
+   * made on. The whole set rather than the change, because a report that left
+   * something out could never say it had stopped being followed.
+   */
+  reportOptIns(optIns: ReportedOptIns): Promise<void>;
   /** The outbox entries after the consumer's cursor, in the order they were written. */
   readOutbox(query: OutboxQuery): Promise<OutboxPage>;
   /** Set or clear one person's interest in an event, and read the count after it. */
