@@ -47,12 +47,23 @@ describe('reading an interaction', () => {
       focusedOption: null,
       userId: '204255221017214977',
       guildId: '900000000000000001',
+      guildName: null,
       channelId: '900000000000000002',
       context: 'guild',
       installedInServer: true,
       memberPermissions: [],
       applicationPermissions: [],
     });
+  });
+
+  /**
+   * What the server calls itself, which the binding report carries so that a
+   * board's dashboard can name the server rather than showing its identifier.
+   * An interaction from a direct message has no server and so has no name.
+   */
+  it('reads what the server calls itself, where there is a server', () => {
+    const named = toInteraction(chatCommand({ guild: { name: 'IEEE at Illinois' } }) as never);
+    expect(named.guildName).toBe('IEEE at Illinois');
   });
 
   it('reads the options of a chat command by name', () => {

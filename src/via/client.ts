@@ -515,6 +515,14 @@ export interface SeriesCreated {
   skipped: string[];
 }
 
+/** What the bot reports about one server it is installed in. */
+export interface ReportedGuildBinding {
+  guildId: string;
+  rsoId: number;
+  guildName: string;
+  boundBy: string | null;
+}
+
 export interface ViaClient {
   /** Open a link session for a Discord account and get the address it opens. */
   openLinkSession(discordUserId: string): Promise<LinkSession>;
@@ -539,6 +547,21 @@ export interface ViaClient {
    * `forbidden` when they have one but are not on that board.
    */
   confirmBinding(rsoId: number, actingDiscordUserId: string): Promise<void>;
+  /**
+   * Tell the web platform which organization a server is bound to, so that the
+   * organization's own dashboard can say the bot is set up.
+   *
+   * The binding belongs to the bot and the web platform keeps a mirror of it,
+   * because it has no account on the bot's database. The report is what the bot
+   * has rather than what changed, so sending the same binding again is the same
+   * server and not a second one.
+   */
+  reportGuildBinding(binding: ReportedGuildBinding): Promise<void>;
+  /**
+   * Tell the web platform that a server is bound to no organization any more,
+   * because it was rebound, taken out of setup, or the bot has left it.
+   */
+  forgetGuildBinding(guildId: string): Promise<void>;
   /** The outbox entries after the consumer's cursor, in the order they were written. */
   readOutbox(query: OutboxQuery): Promise<OutboxPage>;
   /** Set or clear one person's interest in an event, and read the count after it. */
