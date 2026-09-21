@@ -312,6 +312,33 @@ describe('accepting a recommendation', () => {
     expect(reply.content).toContain('meetings');
   });
 
+  /**
+   * The web platform keeps a week whose room already shows a reservation, since
+   * that booking is very often this organization's own, arriving from the
+   * facilities sources before the repeat is entered. The board member is told
+   * which weeks those are, in the same message that says what was created.
+   */
+  it('names the weeks the room is already reserved on', async () => {
+    const { started, accept } = await recommended();
+    const asWritten = started.via.createEventSeries.bind(started.via);
+    started.via.createEventSeries = async (request, actingDiscordUserId) => ({
+      ...(await asWritten(request, actingDiscordUserId)),
+      reserved: ['2026-09-23', '2026-09-30'],
+    });
+
+    const named = buttonWithPrefix(
+      await answer(board({ customId: accept }), started.context),
+      NAME_PREFIX,
+    );
+    const reply = await answer(
+      board({ kind: 'modal', customId: named, fields: { title: 'Weekly meeting' } }),
+      started.context,
+    );
+
+    expect(reply.content).toContain('2026-09-23, 2026-09-30');
+    expect(reply.content).toMatch(/reserv/i);
+  });
+
   it('refuses a repeat with no name rather than creating one nobody can read', async () => {
     const { started, accept } = await recommended();
     const reply = await answer(

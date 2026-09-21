@@ -513,6 +513,13 @@ export interface SeriesCreated {
   eventIds: number[];
   created: number;
   skipped: string[];
+  /**
+   * The dates whose room already shows a reservation from the facilities
+   * sources. Those weeks were created rather than left out, because the
+   * reservation is very often this organization's own booking, which reaches
+   * the web platform before the repeat is entered.
+   */
+  reserved: string[];
 }
 
 /** What the bot reports about one server it is installed in. */
@@ -1221,10 +1228,12 @@ export function parseSeriesCreated(body: unknown): SeriesCreated {
   const raw = body as Record<string, unknown>;
   const eventIds = Array.isArray(raw.event_ids) ? raw.event_ids.map(Number) : [];
   const skipped = Array.isArray(raw.skipped) ? raw.skipped.map(String) : [];
+  const reserved = Array.isArray(raw.reserved) ? raw.reserved.map(String) : [];
   return {
     seriesId: Number(raw.series_id),
     eventIds,
     created: Number(raw.created ?? eventIds.length),
     skipped,
+    reserved,
   };
 }

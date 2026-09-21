@@ -1059,7 +1059,7 @@ export function createFakeViaClient(): FakeViaClient {
           'invalid',
         );
       }
-      return { seriesId, eventIds, created: eventIds.length, skipped: [] };
+      return { seriesId, eventIds, created: eventIds.length, skipped: [], reserved: [] };
     },
 
     async listRsoMembers(rsoId: number, actingDiscordUserId: string): Promise<RsoMember[]> {
