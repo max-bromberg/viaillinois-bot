@@ -18,7 +18,7 @@ import {
 import {
   midtermsCommand, coursesAddCommand, coursesRemoveCommand, coursesListCommand,
 } from './midterms.ts';
-import { roomsCommand, courseCommand, buildingCommand } from './campus.ts';
+import { roomsCommand, roomsComponent, courseCommand, buildingCommand } from './campus.ts';
 import {
   postponeCommand, cancelCommand, describeCommand, visibilityCommand, repostCommand,
   noteCommand, adminComponent, adminFormComponent,
@@ -116,6 +116,7 @@ export const componentHandlers: readonly ComponentHandler[] = [
   schedulerAcceptComponent,
   schedulerComponent,
   rolesComponent,
+  roomsComponent,
   // The comment handler comes before the one its prefix sits inside, for the
   // same reason the administrative form handler does: the first prefix that
   // matches answers, and only one of the two can open a form.

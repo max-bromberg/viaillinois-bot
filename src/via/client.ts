@@ -513,6 +513,28 @@ export interface SeriesCreated {
   eventIds: number[];
   created: number;
   skipped: string[];
+  /**
+   * The dates whose room already shows a reservation from the facilities
+   * sources. Those weeks were created rather than left out, because the
+   * reservation is very often this organization's own booking, which reaches
+   * the web platform before the repeat is entered.
+   */
+  reserved: string[];
+}
+
+/** What the bot reports about one server it is installed in. */
+export interface ReportedGuildBinding {
+  guildId: string;
+  rsoId: number;
+  guildName: string;
+  boundBy: string | null;
+}
+
+/** Everything one person has asked to be told about, as the bot holds it. */
+export interface ReportedOptIns {
+  discordUserId: string;
+  following: number[];
+  reminders: number[];
 }
 
 export interface ViaClient {
@@ -539,6 +561,28 @@ export interface ViaClient {
    * `forbidden` when they have one but are not on that board.
    */
   confirmBinding(rsoId: number, actingDiscordUserId: string): Promise<void>;
+  /**
+   * Tell the web platform which organization a server is bound to, so that the
+   * organization's own dashboard can say the bot is set up.
+   *
+   * The binding belongs to the bot and the web platform keeps a mirror of it,
+   * because it has no account on the bot's database. The report is what the bot
+   * has rather than what changed, so sending the same binding again is the same
+   * server and not a second one.
+   */
+  reportGuildBinding(binding: ReportedGuildBinding): Promise<void>;
+  /**
+   * Tell the web platform that a server is bound to no organization any more,
+   * because it was rebound, taken out of setup, or the bot has left it.
+   */
+  forgetGuildBinding(guildId: string): Promise<void>;
+  /**
+   * Tell the web platform everything this person has asked to be told about,
+   * so that the website shows the same answer whichever side the choice was
+   * made on. The whole set rather than the change, because a report that left
+   * something out could never say it had stopped being followed.
+   */
+  reportOptIns(optIns: ReportedOptIns): Promise<void>;
   /** The outbox entries after the consumer's cursor, in the order they were written. */
   readOutbox(query: OutboxQuery): Promise<OutboxPage>;
   /** Set or clear one person's interest in an event, and read the count after it. */
@@ -1184,10 +1228,12 @@ export function parseSeriesCreated(body: unknown): SeriesCreated {
   const raw = body as Record<string, unknown>;
   const eventIds = Array.isArray(raw.event_ids) ? raw.event_ids.map(Number) : [];
   const skipped = Array.isArray(raw.skipped) ? raw.skipped.map(String) : [];
+  const reserved = Array.isArray(raw.reserved) ? raw.reserved.map(String) : [];
   return {
     seriesId: Number(raw.series_id),
     eventIds,
     created: Number(raw.created ?? eventIds.length),
     skipped,
+    reserved,
   };
 }

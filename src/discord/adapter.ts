@@ -59,6 +59,8 @@ export interface Interaction {
   focusedOption: { name: string; value: string } | null;
   userId: string;
   guildId: string | null;
+  /** What the server calls itself, where the interaction came from one. */
+  guildName: string | null;
   channelId: string | null;
   /** Where the person is: a server, the bot direct messages, or another private channel. */
   context: InteractionContext;
@@ -365,6 +367,7 @@ export function toInteraction(raw: unknown): Interaction {
     options?: { data?: readonly unknown[] };
     user: { id: string };
     guildId?: string | null;
+    guild?: { name?: string | null } | null;
     channelId?: string | null;
     context?: number | null;
     authorizingIntegrationOwners?: Record<string, unknown> | null;
@@ -387,6 +390,9 @@ export function toInteraction(raw: unknown): Interaction {
     focusedOption: kind === 'autocomplete' ? focused : null,
     userId: String(source.user.id),
     guildId: source.guildId ?? null,
+    // What the server calls itself, which the binding report carries so that a
+    // board's dashboard can name the server rather than showing its identifier.
+    guildName: source.guild?.name ?? null,
     channelId: source.channelId ?? null,
     context: readContext(source),
     installedInServer: readInstalledInServer(source),

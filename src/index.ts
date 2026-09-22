@@ -28,6 +28,8 @@ import { createAnnouncementHandlers } from './announce/handlers.ts';
 import { createMidtermHandlers } from './announce/midterms.ts';
 import { createMembershipHandlers } from './announce/membership.ts';
 import { createLinkHandlers } from './identity/links.ts';
+import { createBindingReporter, createGuildBindingHandlers } from './guilds/binding.ts';
+import { createOptInHandlers } from './feed/optIns.ts';
 import { createThisWeekMessage } from './announce/thisWeek.ts';
 import { createOutboxCursors } from './outbox/cursor.ts';
 import { createOutboxConsumer } from './outbox/consumer.ts';
@@ -99,7 +101,14 @@ const feed = createFeedStore(db);
  * for: it holds interest by NetID, and the bot holds no NetID.
  */
 const interestMarks = createInterestMarks(db);
-const guildLifecycle = createGuildLifecycle({ guilds });
+/**
+ * What the bot tells the web platform about the servers it is in, so that a
+ * board's own dashboard can say whether the bot is set up. The binding lives
+ * here and the web platform keeps a mirror of it.
+ */
+const bindingReporter = createBindingReporter({ guilds, via });
+
+const guildLifecycle = createGuildLifecycle({ guilds, reporter: bindingReporter });
 const deliveries = createDeliveries(db);
 const mirrors = createEventMirrors(db);
 const cursors = createOutboxCursors(db);
@@ -200,6 +209,19 @@ const consumer = createOutboxConsumer({
       directory: netIds,
       deleteLocalData: discordUserId => deleteLocalData(db, discordUserId, { roles: membershipRoles }),
     }),
+    /**
+     * A board disconnecting its server from the dashboard on the website. The
+     * website cannot reach this database, so the instruction arrives here and
+     * the binding is cleared where it actually lives.
+     */
+    ...createGuildBindingHandlers({ guilds }),
+    /**
+     * Somebody followed an organization or asked for a reminder on the
+     * website. The website cannot reach the tables those live in, so the
+     * choice arrives here and is applied where it counts, and what the bot
+     * holds afterwards is reported back so the two agree.
+     */
+    ...createOptInHandlers({ feed, via }),
   },
   // The cache is dropped for an organization the moment an entry touches it,
   // so a change made on the website shows in Discord within seconds.
@@ -311,6 +333,7 @@ const dispatch = createDispatcher({
   guilds,
   feed,
   interestMarks,
+  bindingReporter,
   websiteUrl: config.viaPublicUrl,
   rateWindows,
   polls,

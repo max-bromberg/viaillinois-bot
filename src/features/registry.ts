@@ -633,8 +633,8 @@ export const features: readonly Feature[] = [
   },
   {
     id: 'campus.rooms',
-    description: 'Show the rooms of a building that have no class, no reservation and no VIA event in them for a window of time.',
-    summary: 'Show the rooms of a building with nothing in them for a window of time.',
+    description: 'Show the rooms of a building that have no class, no reservation and no VIA event in them, right now or over a window of time.',
+    summary: 'Show the rooms of a building with nothing in them, right now or over a window of time.',
     category: 'command',
     defaultEnabled: true,
     requiredPermissions: [],
@@ -643,7 +643,7 @@ export const features: readonly Feature[] = [
     contexts: EVERYWHERE,
     command: {
       name: 'rooms',
-      description: 'Find a free room in a building.',
+      description: 'Find a room that is free right now, or on any day you pick.',
       options: [
         {
           name: 'building',
@@ -654,8 +654,9 @@ export const features: readonly Feature[] = [
         },
         {
           name: 'date',
-          description: 'The day, written as YYYY-MM-DD. Leave it out for today.',
+          description: 'The day, or right now. Pick one as you type. Leave it out for right now.',
           kind: 'string',
+          autocomplete: true,
         },
         {
           name: 'from',

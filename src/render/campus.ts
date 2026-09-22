@@ -1,7 +1,7 @@
 import { campusDate, campusDateTime, campusTimeOfDay, toInstant } from './campusTime.ts';
 import { fitToMessage, groupByCampusDay, weekHeading } from './digest.ts';
 import { placeOf, whenOf } from './eventCard.ts';
-import type { Reply } from '../discord/adapter.ts';
+import type { Reply, ReplyRow } from '../discord/adapter.ts';
 import type { Building, Course, CourseSection, FreeRooms, Midterm } from '../via/client.ts';
 
 /**
@@ -163,30 +163,123 @@ function windowOf(free: FreeRooms): string {
   return to ? `${from} to ${to}` : from;
 }
 
-/** What one free room offers, which is its number, its size and its equipment. */
-function roomLine(room: FreeRooms['locations'][number]): string {
-  const parts = [room.roomNumber ?? `Room ${room.locationId}`];
-  if (room.maxCapacity !== null) parts.push(`up to ${room.maxCapacity} people`);
-  if (room.hasAvEquipment) parts.push('with audio visual equipment');
-  return parts.join(', ');
+/**
+ * The floors, in the order a person walks up them. A room number on this
+ * campus begins with the floor it is on, so the first character of the number
+ * is the whole of what is read here.
+ */
+const FLOOR_NAMES: readonly string[] = [
+  'First floor', 'Second floor', 'Third floor', 'Fourth floor', 'Fifth floor',
+  'Sixth floor', 'Seventh floor', 'Eighth floor', 'Ninth floor',
+];
+
+/** The basement, which a room number writes as a leading B or a leading zero. */
+const BASEMENT = 'Basement';
+
+/**
+ * What a listing too long for one message says about the floors it had to drop.
+ * The digest's own sentence about the rest of the week says nothing true about
+ * a building.
+ */
+export const ROOMS_LEFT_OUT =
+  'Some floors are left out, because Discord will not carry a longer message. Please ask about a shorter window to see them all.';
+
+/** Rooms whose numbers say nothing about where in the building they are. */
+const ELSEWHERE = 'Elsewhere in the building';
+
+/**
+ * Which floor a room number names, and where that floor sorts.
+ *
+ * A number VIA holds that says nothing about a floor is not guessed at. Those
+ * rooms are gathered at the end under a heading that says so, because a room
+ * put on the wrong floor sends somebody up two flights for nothing.
+ */
+export function floorOf(roomNumber: string | null): { label: string; order: number } {
+  const first = (roomNumber ?? '').trim().charAt(0).toUpperCase();
+  if (first === 'B' || first === '0') return { label: BASEMENT, order: -1 };
+  const digit = Number(first);
+  if (Number.isInteger(digit) && digit >= 1 && digit <= FLOOR_NAMES.length) {
+    return { label: FLOOR_NAMES[digit - 1]!, order: digit };
+  }
+  return { label: ELSEWHERE, order: FLOOR_NAMES.length + 1 };
+}
+
+/** What a room is called, which is its number, or its identifier where VIA has no number. */
+function roomName(room: FreeRooms['locations'][number]): string {
+  return room.roomNumber ?? `Room ${room.locationId}`;
 }
 
 /**
- * The rooms of a building with nothing in them for a window. The building is
- * named as the web platform canonicalized it, so somebody who typed a code
- * sees which building they actually asked about.
+ * The free rooms gathered by floor, each floor's rooms in the order their
+ * numbers run, and the floors in the order somebody walks up them.
  */
-export function renderFreeRooms(free: FreeRooms): string {
-  const window = windowOf(free);
-  if (free.locations.length === 0) {
-    return `Every room VIA knows in ${free.building} is in use ${window}.`;
+function byFloor(locations: FreeRooms['locations']): { label: string; rooms: string[] }[] {
+  const floors = new Map<string, { label: string; order: number; rooms: string[] }>();
+  for (const room of locations) {
+    const floor = floorOf(room.roomNumber);
+    const held = floors.get(floor.label) ?? { ...floor, rooms: [] };
+    held.rooms.push(roomName(room));
+    floors.set(floor.label, held);
   }
 
-  return [
-    `**The rooms free in ${free.building}**, ${window}`,
-    '',
-    ...free.locations.map(room => `- ${roomLine(room)}`),
-  ].join('\n');
+  return [...floors.values()]
+    .sort((a, b) => a.order - b.order)
+    .map(floor => ({
+      label: floor.label,
+      rooms: [...floor.rooms].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })),
+    }));
+}
+
+/**
+ * The rooms of a building with nothing in them for a window.
+ *
+ * A building with an empty hour in it has dozens of free rooms, and a column
+ * of dozens of lines is not an answer anybody reads. The rooms of a floor go
+ * on one line instead, so the answer is as tall as the building rather than as
+ * tall as the room list, and somebody who wants the second floor reads one
+ * line.
+ *
+ * The rooms with a projector in them are named once at the end. A note beside
+ * every room number would drown the numbers themselves, and which rooms have
+ * one is what somebody with a presentation is reading for.
+ *
+ * The building is named as the web platform canonicalized it, so somebody who
+ * typed a code sees which building they actually asked about. How many people
+ * a room holds is not shown, here or anywhere: the number VIA holds is not one
+ * anybody measured, and it reads the same for very nearly every room.
+ */
+export function renderFreeRooms(free: FreeRooms, components: ReplyRow[] = []): Reply {
+  const window = windowOf(free);
+  if (free.locations.length === 0) {
+    return {
+      content: `Every room VIA knows in ${free.building} is in use ${window}.`,
+      components,
+    };
+  }
+
+  const count = free.locations.length;
+  const equipped = free.locations.filter(room => room.hasAvEquipment).map(roomName);
+  const tail = equipped.length === 0 ? [] : ['', equipped.length === 1
+    ? `${equipped[0]} has audio visual equipment.`
+    : `These rooms have audio visual equipment: ${equipped.join(', ')}.`];
+
+  // Every floor is one line, and the floors are one group rather than one
+  // group each, so that they read as a building rather than as a column with a
+  // blank line between every pair of them. A building with more free rooms
+  // than a message will hold then loses whole floors from the top down.
+  return {
+    content: fitToMessage({
+      head: [
+        `**Rooms free in ${free.building}**`,
+        `${window}. ${count === 1 ? 'One room is free.' : `${count} rooms are free.`}`,
+        '',
+      ],
+      days: [byFloor(free.locations).map(floor => `**${floor.label}**  ${floor.rooms.join(', ')}`)],
+      tail,
+      cutNote: ROOMS_LEFT_OUT,
+    }),
+    components,
+  };
 }
 
 /** The letters the timetable writes a weekday as, and the days they stand for. */

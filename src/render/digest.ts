@@ -102,6 +102,12 @@ export interface MessageLines {
   head: readonly string[];
   days: readonly (readonly string[])[];
   tail?: readonly string[];
+  /**
+   * What a message that had to be cut says about what is missing, where the
+   * digest's own sentence about the rest of the week is the wrong sentence.
+   * The free rooms of a building are the case: what was cut is floors.
+   */
+  cutNote?: string;
 }
 
 /** Every line of a message, with a blank line between one day and the next. */
@@ -115,7 +121,7 @@ function assemble(lines: MessageLines, days: readonly (readonly string[])[], cut
     ...lines.head,
     ...body,
     ...(lines.tail ?? []),
-    ...(cut ? ['', REST_OF_THE_WEEK] : []),
+    ...(cut ? ['', lines.cutNote ?? REST_OF_THE_WEEK] : []),
   ].join('\n');
 }
 

@@ -442,6 +442,11 @@ async function create(
   if (created.skipped.length > 0) {
     lines.push('', `VIA left out ${created.skipped.length} of the dates, because the room is taken then: ${created.skipped.join(', ')}.`);
   }
+  // A reservation is not a refusal. The week was created, and the board member
+  // is told because the booking might belong to somebody else.
+  if (created.reserved.length > 0) {
+    lines.push('', `The room already has a reservation on these dates: ${created.reserved.join(', ')}. Check that the reservation is yours.`);
+  }
   lines.push('', 'Every server that follows this organization will announce it, and you can change any of it on viaillinois.com.');
   return { content: lines.join('\n') };
 }

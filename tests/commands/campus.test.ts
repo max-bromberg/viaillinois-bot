@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  roomsCommand, courseCommand, buildingCommand,
-  NOT_A_BUILDING_MESSAGE, noSuchBuildingMessage,
+  roomsCommand, roomsComponent, courseCommand, buildingCommand,
+  NOT_A_BUILDING_MESSAGE, ROOMS_GONE_MESSAGE, noSuchBuildingMessage,
 } from '../../src/commands/campus.ts';
 import { NO_SUCH_COURSE_MESSAGE } from '../../src/commands/midterms.ts';
 import { interaction, testContext, type TestContext } from './support.ts';
@@ -122,6 +122,153 @@ describe('finding a free room', () => {
   });
 });
 
+/**
+ * Picking the day and the hours.
+ *
+ * Discord has no date box, so the day is completed as a person types it and
+ * every answer carries the three menus that move the window: the day, the hour
+ * it starts at, and how long it runs. Nobody has to know that a date is written
+ * YYYY-MM-DD, and nobody has to run the command again to look an hour later.
+ */
+describe('picking when to look for a free room', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  const asAda = (overrides: Record<string, unknown> = {}) =>
+    interaction({ userId: ADA, commandName: 'rooms', ...overrides });
+
+  const completeDate = (typed: string) => roomsCommand.autocomplete!(
+    asAda({ kind: 'autocomplete', focusedOption: { name: 'date', value: typed } }),
+    ctx.context,
+  );
+
+  it('completes the day to right now, today, tomorrow and the days after', async () => {
+    const choices = await completeDate('');
+    expect(choices[0]!.value).toBe('now');
+    expect(choices[0]!.name.toLowerCase()).toContain('right now');
+    expect(choices.map(choice => choice.value)).toContain('2026-09-05');
+    expect(choices.map(choice => choice.value)).toContain('2026-09-06');
+    expect(choices.some(choice => choice.name.startsWith('Today'))).toBe(true);
+    expect(choices.some(choice => choice.name.startsWith('Tomorrow'))).toBe(true);
+  });
+
+  it('names each day in words, so nobody has to know how a date is written', async () => {
+    const choices = await completeDate('');
+    const sunday = choices.find(choice => choice.value === '2026-09-06');
+    expect(sunday!.name).toContain('Sunday');
+    expect(sunday!.name).toContain('September 6');
+  });
+
+  it('narrows the days to what has been typed, by name or by date', async () => {
+    expect((await completeDate('tomo')).map(choice => choice.value)).toEqual(['2026-09-06']);
+    expect((await completeDate('2026-09-08')).map(choice => choice.value)).toEqual(['2026-09-08']);
+  });
+
+  it('never offers Discord more completions than it will show', async () => {
+    expect((await completeDate('')).length).toBeLessThanOrEqual(25);
+  });
+
+  it('takes right now as the day, which is the window it already defaults to', async () => {
+    const reply = await roomsCommand.run(asAda({
+      options: { building: 'ECEB', date: 'now' },
+    }), ctx.context);
+    expect(reply.content).toContain('9:30 AM');
+    expect(reply.content).toContain('10:30 AM');
+  });
+
+  /** Three menus, each of them a row of its own, which is how Discord takes them. */
+  it('carries a menu for the day, a menu for the hour and a menu for how long', async () => {
+    const reply = await roomsCommand.run(asAda({ options: { building: 'ECEB' } }), ctx.context);
+    const menus = (reply.components ?? []).flatMap(row => row.components);
+    expect(menus).toHaveLength(3);
+    for (const menu of menus) {
+      expect(menu.kind).toBe('select');
+      expect((menu as { options?: unknown[] }).options!.length).toBeLessThanOrEqual(25);
+      expect((menu as { customId: string }).customId.length).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('shows right now as the day already chosen when that is the window', async () => {
+    const reply = await roomsCommand.run(asAda({ options: { building: 'ECEB' } }), ctx.context);
+    const day = (reply.components![0]!.components[0] as {
+      options: { value: string; selected?: boolean }[];
+    }).options;
+    expect(day.find(option => option.selected)!.value).toBe('now');
+  });
+
+  it('carries the menus on a building with nothing free, so the hours can be moved', async () => {
+    ctx.via.occupyRoom(5);
+    const reply = await roomsCommand.run(asAda({ options: { building: 'ECEB' } }), ctx.context);
+    expect((reply.components ?? []).flatMap(row => row.components)).toHaveLength(3);
+  });
+});
+
+/**
+ * The menus answer in place: the message a channel is already reading is
+ * rewritten with the new window rather than a second message being posted
+ * under it.
+ */
+describe('moving the window from the menus', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  /** Run the command, then press one of the menus it answered with. */
+  async function press(field: number, value: string, options: Record<string, string> = { building: 'ECEB' }) {
+    const first = await roomsCommand.run(
+      interaction({ userId: ADA, commandName: 'rooms', options }),
+      ctx.context,
+    );
+    const menu = first.components![field]!.components[0] as { customId: string };
+    return roomsComponent.run(
+      interaction({ userId: ADA, kind: 'select', customId: menu.customId, values: [value] }),
+      ctx.context,
+    );
+  }
+
+  it('answers in place, which keeps the window in the message people are reading', () => {
+    expect(roomsComponent.updateInPlace).toBe(true);
+  });
+
+  it('looks at the day that was chosen, in the building that was asked about', async () => {
+    const reply = await press(0, '2026-09-10');
+    expect(reply.content).toContain('Thu, Sep 10');
+    expect(reply.content).toContain('Electrical & Computer Eng Bldg');
+  });
+
+  it('looks at the hour that was chosen, on the day already being read', async () => {
+    const reply = await press(1, '18', { building: 'ECEB', date: '2026-09-10' });
+    expect(reply.content).toContain('Thu, Sep 10');
+    expect(reply.content).toContain('6:00 PM');
+  });
+
+  it('shortens the window to the length that was chosen', async () => {
+    const reply = await press(2, '30');
+    expect(reply.content).toContain('9:30 AM');
+    expect(reply.content).toContain('10:00 AM');
+  });
+
+  it('carries the menus on every answer, so the window can be moved again', async () => {
+    const reply = await press(0, '2026-09-10');
+    expect((reply.components ?? []).flatMap(row => row.components)).toHaveLength(3);
+  });
+
+  it('says so plainly when the menu is from a bot that is no longer running', async () => {
+    const reply = await roomsComponent.run(
+      interaction({ userId: ADA, kind: 'select', customId: 'rooms:day:', values: ['now'] }),
+      ctx.context,
+    );
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+});
+
 describe('looking a course up', () => {
   const ADA = '204255221017214977';
   let ctx: TestContext;
@@ -195,5 +342,124 @@ describe('looking a building up', () => {
   it('asks for a building when the command was run without one', async () => {
     const reply = await buildingCommand.run(asAda({ options: {} }), ctx.context);
     expect(reply.content).toBe(NOT_A_BUILDING_MESSAGE);
+  });
+});
+
+/**
+ * A window that runs past midnight.
+ *
+ * The bot builds a window two ways. A window that starts at this moment runs
+ * on from it, and one that starts at a named hour of a named day used to stop
+ * at the last reading of that day whatever length was asked for. So standing
+ * in a building at eleven at night and asking for three hours answered about
+ * three hours, and choosing tonight and eleven and three hours from the menus
+ * answered about fifty nine minutes, with nothing saying why. The web platform
+ * reads a window of up to seven days, so there was never anything to clamp
+ * against, and the two ways of asking the same question now agree.
+ *
+ * The whole of a day is a different request and still ends when the day does.
+ */
+describe('a window that runs past midnight', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  /** The window the web platform was asked about, as the bot sent it. */
+  function asked(): { from: string; to: string } {
+    const query = ctx.via.lastFreeRoomQuery();
+    return { from: query.from, to: query.to };
+  }
+
+  it('runs into the next day rather than stopping at the last reading of this one', async () => {
+    await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10', from: '23', to: '25' },
+      }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 23:00:00', to: '2026-09-11 01:00:00' });
+  });
+
+  it('asks the same thing whichever way the window was given', async () => {
+    const first = await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10', from: '23' },
+      }),
+      ctx.context,
+    );
+    // The length menu is the third, and three hours from eleven at night is
+    // the case that used to be cut down to fifty nine minutes.
+    const menu = first.components![2]!.components[0] as { customId: string };
+    await roomsComponent.run(
+      interaction({ userId: ADA, kind: 'select', customId: menu.customId, values: ['180'] }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 23:00:00', to: '2026-09-11 02:00:00' });
+  });
+
+  /** The whole of a day is a request about that day, so it still ends with it. */
+  it('still ends the whole of a day when that day ends', async () => {
+    await roomsCommand.run(
+      interaction({
+        userId: ADA, commandName: 'rooms',
+        options: { building: 'ECEB', date: '2026-09-10' },
+      }),
+      ctx.context,
+    );
+    expect(asked()).toEqual({ from: '2026-09-10 00:00:00', to: '2026-09-10 23:59:59' });
+  });
+});
+
+/**
+ * What a menu identifier is allowed to say.
+ *
+ * Every menu under a room answer carries the window written into its
+ * identifier, and Discord hands that identifier back when somebody presses it.
+ * The bot wrote those identifiers, so this is not a stranger's input, but a
+ * build that changes their shape is one whose old messages are still on the
+ * screen in channels. An identifier that does not say something the bot could
+ * have written is refused rather than half read.
+ */
+describe('a menu identifier the bot did not write', () => {
+  const ADA = '204255221017214977';
+  let ctx: TestContext;
+
+  beforeEach(() => {
+    ctx = testContext();
+  });
+
+  const press = (customId: string, value = '2026-09-10') => roomsComponent.run(
+    interaction({ userId: ADA, kind: 'select', customId, values: [value] }),
+    ctx.context,
+  );
+
+  it('refuses one naming a part of the window that does not exist', async () => {
+    const reply = await press('rooms:elevenses:2026-09-10:9:60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  it('refuses one whose hour is not a number', async () => {
+    const reply = await press('rooms:day:2026-09-10:half nine:60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  /**
+   * An empty part is not a zero. Reading one as the top of the morning would
+   * answer a question nobody asked, so it is refused like any other identifier
+   * the bot would not have written.
+   */
+  it('refuses one whose hour was left empty rather than reading it as midnight', async () => {
+    const reply = await press('rooms:day:2026-09-10::60:ECEB');
+    expect(reply.content).toBe(ROOMS_GONE_MESSAGE);
+  });
+
+  it('still answers one it did write', async () => {
+    const reply = await press('rooms:day:2026-09-10:9:60:ECEB');
+    expect(reply.content).not.toBe(ROOMS_GONE_MESSAGE);
   });
 });

@@ -29,6 +29,12 @@ const DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric',
 });
 
+/** A day written out in full, which is how a menu and a completion name one. */
+const DAY_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: CAMPUS_TIME_ZONE,
+  weekday: 'long', month: 'long', day: 'numeric',
+});
+
 const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
   timeZone: CAMPUS_TIME_ZONE,
   hour: 'numeric', minute: '2-digit',
@@ -96,6 +102,20 @@ export function toInstant(value: string | Date | null | undefined): Date | null 
 export function campusDate(value: string | Date | null | undefined): string {
   const instant = toInstant(value);
   return instant ? tidy(DATE_FORMAT.format(instant)) : '';
+}
+
+/**
+ * A campus day written out in full, such as Friday, September 19.
+ *
+ * The date and the time of day are written short everywhere the bot lists
+ * something, because a listing is read down a column. A day offered in a menu
+ * or a completion is read on its own and chosen from a handful, so it is
+ * written the way somebody says it, and nobody picking one has to know that a
+ * date is written YYYY-MM-DD.
+ */
+export function campusDayLong(value: string | Date | null | undefined): string {
+  const instant = toInstant(value);
+  return instant ? tidy(DAY_FORMAT.format(instant)) : '';
 }
 
 /** The time of day on campus, as the website writes it. */
@@ -187,6 +207,25 @@ function addDays(fields: CampusFields, days: number): CampusFields {
  */
 export function campusDatePlus(days: number, now: Date = new Date()): string {
   return isoDay(addDays(fieldsOf(now), days));
+}
+
+/**
+ * The campus date a number of days after a campus date, as YYYY-MM-DD.
+ *
+ * A window that starts at a named hour and runs for a named length can finish
+ * on the following day, and the day it finishes on is counted here rather than
+ * by adding milliseconds, for the same reason campusDatePlus counts that way:
+ * a day is not always twenty four hours long on a clock that moves twice a
+ * year. A date this cannot read is handed back as it came, so that the reading
+ * router answers it rather than the bot inventing a day.
+ */
+export function campusDayPlus(day: string, days: number): string {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!parts) return day;
+  return isoDay(addDays({
+    year: Number(parts[1]), month: Number(parts[2]), day: Number(parts[3]),
+    hour: 0, minute: 0, second: 0,
+  }, days));
 }
 
 /** Which day of the week a campus date falls on, zero for Sunday, as the digest day counts. */

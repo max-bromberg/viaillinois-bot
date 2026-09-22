@@ -25,6 +25,7 @@ export function interaction(overrides: Partial<Interaction> = {}): Interaction {
     focusedOption: null,
     userId: '204255221017214977',
     guildId: '900000000000000001',
+    guildName: 'A test server',
     channelId: '900000000000000002',
     context: 'guild',
     installedInServer: true,

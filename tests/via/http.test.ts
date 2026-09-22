@@ -848,7 +848,45 @@ describe('the campus lookups', () => {
       location_id: 5,
       recurrence: { interval_weeks: 1, days_of_week: ['MO'], ends_on: '2026-09-28' },
     });
-    expect(created).toEqual({ seriesId: 4, eventIds: [10, 11, 12], created: 3, skipped: [] });
+    expect(created).toEqual({
+      seriesId: 4, eventIds: [10, 11, 12], created: 3, skipped: [], reserved: [],
+    });
+  });
+
+  /**
+   * The web platform keeps a week whose room is reserved rather than refusing
+   * it, because the reservation is very often this organization's own booking
+   * arriving from the facilities sources before the repeat is entered. The
+   * dates it names have to reach the board member who asked for the repeat.
+   */
+  it('reads the dates the room is already reserved on', async () => {
+    const { via } = client([json(201, JSON.stringify({
+      series_id: 4, event_ids: [10, 11], created: 2, skipped: [], reserved: ['2026-09-21'],
+    }))]);
+    const created = await via.createEventSeries({
+      rsoId: 1,
+      title: 'Weekly meeting',
+      startTime: '2026-09-14 18:00:00',
+      endTime: '2026-09-14 19:00:00',
+      recurrence: { intervalWeeks: 1, daysOfWeek: ['MO'], endsOn: '2026-09-28' },
+    }, '204255221017214977');
+
+    expect(created.reserved).toEqual(['2026-09-21']);
+  });
+
+  it('reads no reserved dates from a web platform that names none', async () => {
+    const { via } = client([json(201, JSON.stringify({
+      series_id: 4, event_ids: [10], created: 1, skipped: [],
+    }))]);
+    const created = await via.createEventSeries({
+      rsoId: 1,
+      title: 'Weekly meeting',
+      startTime: '2026-09-14 18:00:00',
+      endTime: '2026-09-14 19:00:00',
+      recurrence: { intervalWeeks: 1, daysOfWeek: ['MO'], endsOn: '2026-09-28' },
+    }, '204255221017214977');
+
+    expect(created.reserved).toEqual([]);
   });
 
   it('reads the members of an organization as the acting person, with their roles lowered', async () => {

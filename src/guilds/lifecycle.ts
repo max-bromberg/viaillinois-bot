@@ -19,6 +19,12 @@ import type { GuildStore } from './store.ts';
 
 export interface GuildLifecycleOptions {
   guilds: GuildStore;
+  /**
+   * Tells the web platform what the bot has, so that a board's dashboard stops
+   * showing a server the bot is no longer in. Optional, because a deployment
+   * without the internal service API has nothing to report to.
+   */
+  reporter?: { forget(guildId: string): Promise<void> };
 }
 
 export interface GuildLifecycle {
@@ -26,7 +32,7 @@ export interface GuildLifecycle {
   onGuildDelete(raw: unknown): Promise<void>;
 }
 
-export function createGuildLifecycle({ guilds }: GuildLifecycleOptions): GuildLifecycle {
+export function createGuildLifecycle({ guilds, reporter }: GuildLifecycleOptions): GuildLifecycle {
   return {
     /**
      * The gateway announces every server the bot is in on every connection, so
@@ -62,6 +68,9 @@ export function createGuildLifecycle({ guilds }: GuildLifecycleOptions): GuildLi
       } catch (err) {
         console.error(`removing the server ${guild.id} failed:`, (err as Error).message);
       }
+      // After the rows are gone, and outside their try, because a board should
+      // stop being shown this server whether or not the deletion went cleanly.
+      await reporter?.forget(guild.id);
     },
   };
 }

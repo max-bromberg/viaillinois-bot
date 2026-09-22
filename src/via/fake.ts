@@ -7,7 +7,7 @@ import {
   type EventFeedback,
   type EventPage, type EventQuery, type FreeRooms, type FreeRoomQuery, type InterestAnswer,
   type InterestSignal, type LinkSession, type LinkedAccount, type Midterm, type MidtermQuery,
-  type OutboxEntry, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement,
+  type OutboxEntry, type OutboxPage, type OutboxQuery, type PersonalCalendar, type Postponement, type ReportedGuildBinding, type ReportedOptIns,
   type Rso, type RsoMember, type RsoWithEvents, type ScheduleRecommendations, type ScheduleRequest,
   type SeriesCreated, type SeriesRequest, type ViaEvent,
 } from './client.ts';
@@ -184,6 +184,16 @@ export interface FakeViaClient extends ViaClient {
   readonly postponements: RecordedPostponement[];
   /** Every question the scheduler was asked, in order. */
   readonly scheduleRequests: ScheduleRequest[];
+  /** Every binding the bot reported, in order, as it reported them. */
+  readonly reportedBindings: ReportedGuildBinding[];
+  /** Every server the bot said is bound to no organization, in order. */
+  readonly forgottenBindings: string[];
+  /** Every set of opt ins the bot reported, in order. */
+  readonly reportedOptIns: ReportedOptIns[];
+  /** Every free room search the fake was asked, in order, as the bot sent it. */
+  readonly freeRoomQueries: FreeRoomQuery[];
+  /** The last free room search, which is what a test about a window reads. */
+  lastFreeRoomQuery(): FreeRoomQuery;
   /** Every repeat the fake was asked to create, in order. */
   readonly seriesRequests: SeriesRequest[];
   /** Replace what the scheduler answers, for a test about an answer that has changed. */
@@ -210,6 +220,10 @@ export function createFakeViaClient(): FakeViaClient {
   const links = new Map<string, SeededLink>();
   const sessions: OpenedSession[] = [];
   const calls: string[] = [];
+  const freeRoomQueries: FreeRoomQuery[] = [];
+  const reportedBindings: ReportedGuildBinding[] = [];
+  const forgottenBindings: string[] = [];
+  const reportedOptIns: ReportedOptIns[] = [];
   const rsos = new Map<number, Rso>(RECORDED_RSOS.map(rso => [rso.rsoId, { ...rso }]));
   const events = new Map<number, ViaEvent>([[RECORDED_EVENT.eventId, { ...RECORDED_EVENT }]]);
   const outbox: OutboxEntry[] = [];
@@ -388,6 +402,15 @@ export function createFakeViaClient(): FakeViaClient {
   return {
     sessions,
     calls,
+    freeRoomQueries,
+    reportedBindings,
+    forgottenBindings,
+    reportedOptIns,
+    lastFreeRoomQuery() {
+      const last = freeRoomQueries.at(-1);
+      if (!last) throw new Error('no free room search has been made');
+      return last;
+    },
     interests,
     feedback: given,
 
@@ -533,6 +556,10 @@ export function createFakeViaClient(): FakeViaClient {
       calendarCounter = 0;
       sessions.length = 0;
       calls.length = 0;
+      freeRoomQueries.length = 0;
+      reportedBindings.length = 0;
+      forgottenBindings.length = 0;
+      reportedOptIns.length = 0;
       outbox.length = 0;
       interests.length = 0;
       given.length = 0;
@@ -650,6 +677,24 @@ export function createFakeViaClient(): FakeViaClient {
      * somebody who is not on that board, and a refusal for somebody who has no
      * VIA account at all.
      */
+    async reportGuildBinding(binding) {
+      throwIfInstructed();
+      calls.push('reportGuildBinding');
+      reportedBindings.push(binding);
+    },
+
+    async forgetGuildBinding(guildId) {
+      throwIfInstructed();
+      calls.push('forgetGuildBinding');
+      forgottenBindings.push(guildId);
+    },
+
+    async reportOptIns(optIns) {
+      throwIfInstructed();
+      calls.push('reportOptIns');
+      reportedOptIns.push(optIns);
+    },
+
     async confirmBinding(rsoId, actingDiscordUserId) {
       throwIfInstructed();
       calls.push('confirmBinding');
@@ -815,6 +860,7 @@ export function createFakeViaClient(): FakeViaClient {
     async freeRooms(query: FreeRoomQuery): Promise<FreeRooms> {
       throwIfInstructed();
       calls.push('freeRooms');
+      freeRoomQueries.push(query);
       if (!query.building.trim()) {
         throw new ViaError('A building is required, by code or by name.', 400, 'invalid');
       }
@@ -1013,7 +1059,7 @@ export function createFakeViaClient(): FakeViaClient {
           'invalid',
         );
       }
-      return { seriesId, eventIds, created: eventIds.length, skipped: [] };
+      return { seriesId, eventIds, created: eventIds.length, skipped: [], reserved: [] };
     },
 
     async listRsoMembers(rsoId: number, actingDiscordUserId: string): Promise<RsoMember[]> {

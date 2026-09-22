@@ -659,6 +659,14 @@ async function bindToRso(
     rsoId,
     boundBy: interaction.userId,
   });
+  /*
+   * Tell the web platform, so that the organization's own dashboard says the
+   * bot is set up. The binding is already recorded above, which is what makes
+   * the bot work in this server, so a report that does not get through is a
+   * line missing from a dashboard rather than a setup that failed. The
+   * reporter swallows its own failures for that reason.
+   */
+  await context.bindingReporter?.report(interaction.guildId!, interaction.guildName ?? '');
   const state = await readState(interaction, context);
   const panel = channelsPanel(state, null);
   return { ...panel, content: `This server is now bound to ${rso.name}.\n\n${panel.content}` };

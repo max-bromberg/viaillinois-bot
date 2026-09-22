@@ -30,6 +30,12 @@ export interface CommandContext {
    * the morning after reads it. Left out where a run has none.
    */
   interestMarks?: InterestMarks;
+  /**
+   * Tells the web platform which organization a server is bound to, so that
+   * the organization's own dashboard can say the bot is set up. Left out where
+   * a run has no internal service API to report to.
+   */
+  bindingReporter?: { report(guildId: string, guildName: string): Promise<void> };
   /** The public address of the website, which the link buttons open. */
   websiteUrl: string;
   rateWindows: RateWindows;

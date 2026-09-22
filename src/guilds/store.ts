@@ -93,9 +93,15 @@ export interface PostedMessageRef {
   messageId: string;
 }
 
-/** What a binding is being set to, with the organization when it names one. */
+/**
+ * What a binding is being set to, with the organization when it names one.
+ *
+ * Null is a binding too: it is the state a server is in before setup has
+ * chosen anything, and the state it returns to when a board disconnects it
+ * from their dashboard on the website.
+ */
 export interface BindingChoice {
-  binding: GuildBinding;
+  binding: GuildBinding | null;
   rsoId?: number | null;
   /**
    * The Discord account the web platform confirmed may bind this server, which
