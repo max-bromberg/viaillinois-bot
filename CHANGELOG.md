@@ -6,6 +6,10 @@ at the top that the bump script turns into the next release.
 
 ## Unreleased
 
+## 0.2.0 (2026-09-21)
+
+- 
+
 - Finding a free room is something a person can now do without knowing anything about date formats. A slash command option is a string, a number or a boolean, and there is no date picker to put on one, so asking a student to type 2026-09-19 was asking them to learn a format before they could ask a question. The day option completes as it is typed, to right now, to today, to tomorrow and to each of the next thirteen days, each written the way somebody says it out loud, and every answer carries three menus under it: the day, the hour it starts at, and how long it runs. Pressing one rewrites the message in place with the new window, so looking an hour later costs one press rather than a second command. Right now is a value of the day option, which is what the command already meant when it was run with nothing but a building, and the length menu, which runs from thirty minutes to the rest of the day, is what makes it useful for the question it is usually asked for, which is somewhere to meet briefly.
 - The rooms answer is grouped by floor. An empty hour in a building the size of the Electrical & Computer Engineering Building leaves dozens of rooms free, and a column of dozens of lines is not an answer anybody reads, so the rooms of a floor go on one line and the rooms with a projector are named once at the end. A listing too long for one message now says that floors were left out rather than saying where the rest of the week is.
 - A room search that runs past midnight now runs past midnight. A window starting at a named hour of a named day stopped at the last reading of that day whatever length was asked for, so choosing tonight and eleven and three hours answered about fifty nine minutes with nothing saying why, while the same three hours asked for as right now ran on properly. The web platform reads a window of up to seven days, so there was never anything to stop at, and the two ways of asking the same question now agree. The whole of a day is a different request and still ends when the day does.
